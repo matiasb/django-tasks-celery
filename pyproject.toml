@@ -1,0 +1,101 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [
+  "setuptools",
+]
+
+[project]
+name = "django-tasks-celery"
+description = "A Django Tasks backend which uses Celery as its underlying queue"
+authors = [
+    {name = "Matías Bordese"},
+]
+version = "0.1"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Natural Language :: English",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed"
+]
+requires-python = ">=3.10"
+dependencies = [
+    "Django>=4.2",
+    "typing_extensions",
+    "django-stubs-ext",
+    "celery>=5.3",
+    "django-tasks>=0.12.0",
+]
+
+[project.urls]
+Source = "https://github.com/matiasb/django-tasks-celery"
+Issues = "https://github.com/matiasb/django-tasks-celery/issues"
+Changelog = "https://github.com/matiasb/django-tasks-celery/releases"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "coverage",
+    "django-stubs[compatible-mypy]",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "N", "B", "A", "C4", "T20", "DJ", "S", "UP"]
+ignore = ["E501", "DJ008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = ["S101", "S603", "S105"]
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+warn_unused_ignores = true
+warn_return_any = true
+show_error_codes = true
+strict_optional = true
+implicit_optional = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.django-stubs]
+django_settings_module = "tests.settings"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+ignore_errors = true
+exclude_also = [
+    # Don't complain if tests don't hit defensive assertion code:
+    "raise AssertionError",
+    "raise NotImplementedError",
+
+    # Don't complain about abstract methods, they aren't run:
+    "@(abc.)?abstractmethod",
+
+    # Nor complain about type checking
+    "if TYPE_CHECKING:",
+]
