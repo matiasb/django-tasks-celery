@@ -1,7 +1,6 @@
 import os
 
 from celery import Celery
-
 from django_tasks.base import DEFAULT_TASK_QUEUE_NAME
 
 # Set the default Django settings module for the 'celery' program.

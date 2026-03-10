@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-from functools import partial
 from typing import Any, TypeVar
 
 from celery import current_app as celery_app
@@ -7,10 +6,7 @@ from celery.result import AsyncResult
 from celery.states import FAILURE, PENDING, REVOKED, STARTED, SUCCESS
 from django.apps import apps
 from django.core import checks
-from django.db import transaction
 from django.utils import timezone
-from typing_extensions import ParamSpec
-
 from django_tasks.backends.base import BaseTaskBackend
 from django_tasks.base import (
     TASK_MAX_PRIORITY,
@@ -23,6 +19,8 @@ from django_tasks.base import (
 from django_tasks.exceptions import TaskResultDoesNotExist
 from django_tasks.signals import task_enqueued
 from django_tasks.utils import get_random_id
+from typing_extensions import ParamSpec
+
 from .compat import TASK_CLASSES
 
 T = TypeVar("T")
@@ -126,7 +124,7 @@ class CeleryBackend(BaseTaskBackend):
 
         date_done = async_result.date_done
 
-        task_result = TaskResult(
+        task_result: TaskResult = TaskResult(
             task=self._get_task_from_result(async_result),
             id=result_id,
             status=status,
@@ -148,8 +146,6 @@ class CeleryBackend(BaseTaskBackend):
 
     def _get_task_from_result(self, async_result: AsyncResult) -> Task:
         from django.utils.module_loading import import_string
-
-        from .compat import TASK_CLASSES
 
         task_name = async_result.name
         if task_name is None:
