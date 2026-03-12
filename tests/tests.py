@@ -202,6 +202,11 @@ class CeleryBackendTestCase(SimpleTestCase):
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):
             await default_task_backend.aget_result(str(uuid.uuid4()))
 
+    def test_get_result_missing_extend_setting(self) -> None:
+        with override_settings(CELERY_RESULT_EXTENDED=False):
+            with self.assertRaises(ValueError):
+                default_task_backend.get_result(str(uuid.uuid4()))
+
     def test_invalid_uuid(self) -> None:
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):
             default_task_backend.get_result("123")

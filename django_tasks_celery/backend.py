@@ -122,8 +122,10 @@ class CeleryBackend(BaseTaskBackend):
         return task_result
 
     def get_result(self, result_id: str) -> TaskResult:
-        async_result = AsyncResult(result_id)
+        if celery_app.conf.result_backend is None:
+            raise ValueError("Celery result backend is not configured")
 
+        async_result = AsyncResult(result_id)
         state = async_result.state
         status = CELERY_STATUS_TO_RESULT_STATUS.get(state, TaskResultStatus.READY)
 
@@ -167,6 +169,13 @@ class CeleryBackend(BaseTaskBackend):
 
     def _get_task_from_result(self, async_result: AsyncResult) -> Task:
         from django.utils.module_loading import import_string
+
+        if not celery_app.conf.result_extended:
+            # we cannot reverse the task without the result extended information
+            # which include the task name
+            raise ValueError(
+                "You need to set CELERY_RESULT_EXTENDED=True in your settings"
+            )
 
         task_name = async_result.name
         if task_name is None:

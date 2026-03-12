@@ -61,7 +61,7 @@ Task priorities are mapped from the Django Tasks range (`-100` to `100`) to Cele
 
 ### Result Backend
 
-A Celery result backend is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks.
+A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks. Also, you will need to set [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended).
 
 ### Deferred Tasks
 

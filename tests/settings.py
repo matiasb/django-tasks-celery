@@ -29,3 +29,4 @@ TASKS = {
 # Celery configuration
 CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
+CELERY_RESULT_EXTENDED = True
