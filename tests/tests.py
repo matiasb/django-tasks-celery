@@ -2,6 +2,8 @@ import uuid
 from typing import cast
 from unittest.mock import patch
 
+from celery.contrib.testing.worker import start_worker
+from celery.result import AsyncResult
 from django import VERSION
 from django.core.exceptions import SuspiciousOperation
 from django.test import SimpleTestCase, override_settings
@@ -10,6 +12,7 @@ from django_tasks.base import Task
 from django_tasks.exceptions import InvalidTaskError, TaskResultDoesNotExist
 
 from django_tasks_celery import compat
+from django_tasks_celery.app import app
 from django_tasks_celery.backend import CeleryBackend, _map_priority
 from tests import tasks as test_tasks
 
@@ -256,6 +259,33 @@ class CeleryBackendTestCase(SimpleTestCase):
             any("result backend" in str(w.msg).lower() for w in warnings),
             f"Expected a result backend warning, got: {warnings}",
         )
+
+    def test_takes_context_injected(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            # test_context(attempt: int) internally asserts that:
+            # assert isinstance(context, TaskContext)
+            # assert context.attempt == attempt
+            result = test_tasks.test_context.enqueue(1)
+
+            # Wait for it to finish processing using underlying Celery AsyncResult
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=2)  # block until done
+
+            result.refresh()
+            self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+
+    def test_takes_context_get_id(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.get_task_id.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=2)  # block until done
+
+            result.refresh()
+            self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+
+            # The task returns `context.task_result.id`. We check if it matches the enqueued result ID.
+            self.assertEqual(result.return_value, result.id)
 
 
 class CompatTestCase(SimpleTestCase):

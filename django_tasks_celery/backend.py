@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from typing import Any, TypeVar
 
+from celery import Task as CeleryTask
 from celery import current_app as celery_app
 from celery import shared_task
 from celery.app import default_app
@@ -11,6 +12,8 @@ from django.core import checks
 from django.utils import timezone
 from django_tasks.backends.base import BaseTaskBackend
 from django_tasks.base import (
+    DEFAULT_TASK_PRIORITY,
+    DEFAULT_TASK_QUEUE_NAME,
     TASK_MAX_PRIORITY,
     TASK_MIN_PRIORITY,
     TaskError,
@@ -64,9 +67,62 @@ class Task(BaseTask[P, T]):
     """Celery proxy to the task in the current celery app task registry."""
 
     def __post_init__(self) -> None:
-        # register task with Celery app
-        # https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html#using-the-shared-task-decorator
-        shared_task()(self.func)
+        import functools
+
+        if self.takes_context:
+
+            @functools.wraps(self.func)
+            def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
+                from django_tasks.base import TaskContext
+
+                request = celery_task_self.request
+                hostname = request.hostname or "unknown"
+                priority = request.delivery_info.get("priority", DEFAULT_TASK_PRIORITY)
+
+                # We build a synthetic TaskResult on the fly from the worker context
+                # without needing the result backend
+                task_result = TaskResult[
+                    T
+                ](
+                    task=self.using(
+                        priority=priority,
+                        queue_name=request.delivery_info.get(
+                            "routing_key", DEFAULT_TASK_QUEUE_NAME
+                        )
+                        if request.delivery_info
+                        else DEFAULT_TASK_QUEUE_NAME,
+                        backend=self.backend,
+                        run_after=request.eta,
+                    ),
+                    id=request.id,
+                    status=TaskResultStatus.RUNNING,
+                    enqueued_at=None,
+                    started_at=None,  # Cannot determine start time precisely without additional context
+                    last_attempted_at=None,
+                    finished_at=None,
+                    args=list(args),
+                    kwargs=kwargs,
+                    backend=self.backend,
+                    errors=[],
+                    worker_ids=[hostname],
+                )
+
+                # Synthesize attempt from retries + 1 (first run is retries=0)
+                # TaskContext internally counts len(worker_ids) for attempts, so let's adjust array size
+                for _ in range(request.retries):
+                    task_result.worker_ids.append(hostname)
+
+                context = TaskContext(task_result=task_result)
+                args = (context, *args)
+                return self.call(*args, **kwargs)
+
+            # register task with Celery app
+            # https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html#using-the-shared-task-decorator
+            shared_task(name=self.module_path, bind=True)(wrapper)
+        else:
+            # register task with Celery app
+            shared_task(name=self.module_path)(self.call)
+
         return super().__post_init__()
 
 
