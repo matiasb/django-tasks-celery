@@ -2,6 +2,8 @@ from collections.abc import Iterable
 from typing import Any, TypeVar
 
 from celery import current_app as celery_app
+from celery import shared_task
+from celery.app import default_app
 from celery.result import AsyncResult
 from celery.states import FAILURE, PENDING, REVOKED, STARTED, SUCCESS
 from django.apps import apps
@@ -11,10 +13,12 @@ from django_tasks.backends.base import BaseTaskBackend
 from django_tasks.base import (
     TASK_MAX_PRIORITY,
     TASK_MIN_PRIORITY,
-    Task,
     TaskError,
     TaskResult,
     TaskResultStatus,
+)
+from django_tasks.base import (
+    Task as BaseTask,
 )
 from django_tasks.exceptions import TaskResultDoesNotExist
 from django_tasks.signals import task_enqueued
@@ -22,6 +26,12 @@ from django_tasks.utils import get_random_id
 from typing_extensions import ParamSpec
 
 from .compat import TASK_CLASSES
+
+if not default_app:
+    from django_tasks_celery.app import app as celery_app
+
+    celery_app.set_default()
+
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -50,7 +60,18 @@ def _map_priority(value: int) -> int:
     return max(CELERY_MIN_PRIORITY, min(mapped_value, CELERY_MAX_PRIORITY))
 
 
+class Task(BaseTask[P, T]):
+    """Celery proxy to the task in the current celery app task registry."""
+
+    def __post_init__(self) -> None:
+        # register task with Celery app
+        # https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html#using-the-shared-task-decorator
+        shared_task()(self.func)
+        return super().__post_init__()
+
+
 class CeleryBackend(BaseTaskBackend):
+    task_class = Task
     supports_defer = True
     supports_async_task = True
     supports_priority = True
@@ -58,7 +79,7 @@ class CeleryBackend(BaseTaskBackend):
 
     def enqueue(
         self,
-        task: Task[P, T],
+        task: Task[P, T],  # type: ignore[override]
         args: P.args,  # type:ignore[valid-type]
         kwargs: P.kwargs,  # type:ignore[valid-type]
     ) -> TaskResult[T]:

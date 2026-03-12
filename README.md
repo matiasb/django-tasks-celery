@@ -45,14 +45,14 @@ The Celery-based backend acts as an interface between [Django's tasks interface]
 
 ### Celery App
 
-A Celery app is included at `django_tasks_celery.app`. It reads configuration from your Django settings with the `CELERY_` prefix and auto-discovers tasks. You can use it directly, or configure your own Celery app as you normally would.
+A Celery app is included at `django_tasks_celery.app`. It reads configuration from your Django settings with the `CELERY_` prefix and auto-discovers tasks. You can use it directly, or [configure your own Celery app](https://docs.celeryq.dev/en/main/django/first-steps-with-django.html#using-celery-with-django) as you normally would.
 
 ### Running Workers
 
 Start a Celery worker as usual:
 
 ```shell
-celery -A django_tasks_celery.app worker --loglevel=info
+DJANGO_SETTINGS_MODULE=<your_project.settings> celery -A django_tasks_celery.app worker -l INFO
 ```
 
 ### Priorities
