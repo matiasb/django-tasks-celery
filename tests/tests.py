@@ -13,7 +13,7 @@ from django_tasks.exceptions import InvalidTaskError, TaskResultDoesNotExist
 
 from django_tasks_celery import compat
 from django_tasks_celery.app import app
-from django_tasks_celery.backend import CeleryBackend, _map_priority
+from django_tasks_celery.backend import CeleryBackend, _map_priority, _unmap_priority
 from tests import tasks as test_tasks
 
 
@@ -87,6 +87,7 @@ class CeleryBackendTestCase(SimpleTestCase):
             task_id=result.id,
             eta=run_after,
             priority=7,
+            headers={"django_tasks_priority": 75},
             queue="queue-1",
         )
 
@@ -94,6 +95,11 @@ class CeleryBackendTestCase(SimpleTestCase):
         for priority, expected in [(-100, 0), (-50, 2), (0, 4), (75, 7), (100, 9)]:
             with self.subTest(priority=priority):
                 self.assertEqual(_map_priority(priority), expected)
+
+    def test_priority_unmapping(self) -> None:
+        for priority, expected in [(0, -100), (2, -56), (4, -11), (7, 56), (9, 100)]:
+            with self.subTest(priority=priority):
+                self.assertEqual(_unmap_priority(priority), expected)
 
     def test_check(self) -> None:
         errors = list(default_task_backend.check())
@@ -177,6 +183,72 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         self.assertEqual(result.id, new_result.id)
         self.assertEqual(new_result.status, TaskResultStatus.SUCCESSFUL)
+        self.assertIsNone(new_result.started_at)
+        self.assertIsNotNone(new_result.last_attempted_at)
+        self.assertEqual(new_result.last_attempted_at, new_result.finished_at)
+
+    def test_get_result_retry_is_running(self) -> None:
+        from django.utils import timezone
+
+        result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
+
+        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+            mock_async_result = mock_async_result_cls.return_value
+            mock_async_result.name = test_tasks.noop_task.module_path
+            mock_async_result.state = "RETRY"
+            mock_async_result.result = Exception("retrying")
+            mock_async_result.date_done = timezone.now()
+            mock_async_result.args = []
+            mock_async_result.kwargs = {}
+
+            new_result = default_task_backend.get_result(result.id)
+
+        self.assertEqual(new_result.status, TaskResultStatus.RUNNING)
+        self.assertIsNone(new_result.started_at)
+        self.assertIsNone(new_result.last_attempted_at)
+        self.assertIsNone(new_result.finished_at)
+
+    def test_get_result_received_is_running(self) -> None:
+        from django.utils import timezone
+
+        result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
+
+        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+            mock_async_result = mock_async_result_cls.return_value
+            mock_async_result.name = test_tasks.noop_task.module_path
+            mock_async_result.state = "RECEIVED"
+            mock_async_result.result = None
+            mock_async_result.date_done = timezone.now()
+            mock_async_result.args = []
+            mock_async_result.kwargs = {}
+
+            new_result = default_task_backend.get_result(result.id)
+
+        self.assertEqual(new_result.status, TaskResultStatus.RUNNING)
+        self.assertIsNone(new_result.started_at)
+        self.assertIsNone(new_result.last_attempted_at)
+        self.assertIsNone(new_result.finished_at)
+
+    def test_get_result_revoked_is_failed(self) -> None:
+        from django.utils import timezone
+
+        result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
+
+        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+            mock_async_result = mock_async_result_cls.return_value
+            mock_async_result.name = test_tasks.noop_task.module_path
+            mock_async_result.state = "REVOKED"
+            mock_async_result.result = None
+            mock_async_result.date_done = timezone.now()
+            mock_async_result.args = []
+            mock_async_result.kwargs = {}
+
+            new_result = default_task_backend.get_result(result.id)
+
+        self.assertEqual(new_result.status, TaskResultStatus.FAILED)
+        self.assertIsNone(new_result.started_at)
+        self.assertIsNotNone(new_result.last_attempted_at)
+        self.assertEqual(new_result.last_attempted_at, new_result.finished_at)
 
     async def test_get_result_async(self) -> None:
         from django.utils import timezone
@@ -260,6 +332,22 @@ class CeleryBackendTestCase(SimpleTestCase):
             f"Expected a result backend warning, got: {warnings}",
         )
 
+    @override_settings(CELERY_RESULT_EXTENDED=False)
+    def test_result_extended_warning(self) -> None:
+        from django_tasks_celery.backend import celery_app
+
+        celery_app.config_from_object("django.conf:settings", namespace="CELERY")
+        try:
+            errors = list(default_task_backend.check())
+        finally:
+            celery_app.config_from_object("django.conf:settings", namespace="CELERY")
+
+        warnings = [e for e in errors if e.level < 40]
+        self.assertTrue(
+            any("result_extended" in str(w.msg).lower() for w in warnings),
+            f"Expected a result_extended warning, got: {warnings}",
+        )
+
     def test_takes_context_injected(self) -> None:
         with start_worker(app, perform_ping_check=False):
             # test_context(attempt: int) internally asserts that:
@@ -286,6 +374,17 @@ class CeleryBackendTestCase(SimpleTestCase):
 
             # The task returns `context.task_result.id`. We check if it matches the enqueued result ID.
             self.assertEqual(result.return_value, result.id)
+
+    def test_takes_context_preserves_priority(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.get_task_priority.using(priority=75).enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=2)
+
+            result.refresh()
+            self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+            self.assertEqual(result.return_value, 75)
 
 
 class CompatTestCase(SimpleTestCase):

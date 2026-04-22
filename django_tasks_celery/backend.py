@@ -6,7 +6,7 @@ from celery import current_app as celery_app
 from celery import shared_task
 from celery.app import default_app
 from celery.result import AsyncResult
-from celery.states import FAILURE, PENDING, REVOKED, STARTED, SUCCESS
+from celery.states import FAILURE, PENDING, RECEIVED, RETRY, REVOKED, STARTED, SUCCESS
 from django.apps import apps
 from django.core import checks
 from django.utils import timezone
@@ -45,11 +45,15 @@ CELERY_MAX_PRIORITY = 9
 
 CELERY_STATUS_TO_RESULT_STATUS = {
     PENDING: TaskResultStatus.READY,
+    RECEIVED: TaskResultStatus.RUNNING,
     STARTED: TaskResultStatus.RUNNING,
+    RETRY: TaskResultStatus.RUNNING,
     SUCCESS: TaskResultStatus.SUCCESSFUL,
     FAILURE: TaskResultStatus.FAILED,
     REVOKED: TaskResultStatus.FAILED,
 }
+
+DJANGO_TASKS_PRIORITY_HEADER = "django_tasks_priority"
 
 
 def _map_priority(value: int) -> int:
@@ -61,6 +65,16 @@ def _map_priority(value: int) -> int:
     mapped_value = int(scaled_value)
 
     return max(CELERY_MIN_PRIORITY, min(mapped_value, CELERY_MAX_PRIORITY))
+
+
+def _unmap_priority(value: int) -> int:
+    """Map Celery's 0-9 priority range back to django-tasks."""
+    scaled_value = TASK_MIN_PRIORITY + (
+        value * (TASK_MAX_PRIORITY - TASK_MIN_PRIORITY)
+    ) / (CELERY_MAX_PRIORITY - CELERY_MIN_PRIORITY)
+    mapped_value = int(round(scaled_value))
+
+    return max(TASK_MIN_PRIORITY, min(mapped_value, TASK_MAX_PRIORITY))
 
 
 class Task(BaseTask[P, T]):
@@ -77,7 +91,15 @@ class Task(BaseTask[P, T]):
 
                 request = celery_task_self.request
                 hostname = request.hostname or "unknown"
-                priority = request.delivery_info.get("priority", DEFAULT_TASK_PRIORITY)
+                headers = request.headers or {}
+                celery_priority = (
+                    request.delivery_info.get("priority", DEFAULT_TASK_PRIORITY)
+                    if request.delivery_info
+                    else DEFAULT_TASK_PRIORITY
+                )
+                priority = headers.get(
+                    DJANGO_TASKS_PRIORITY_HEADER, _unmap_priority(celery_priority)
+                )
 
                 # We build a synthetic TaskResult on the fly from the worker context
                 # without needing the result backend
@@ -147,6 +169,7 @@ class CeleryBackend(BaseTaskBackend):
             "task_id": task_id,
             "eta": task.run_after,
             "priority": _map_priority(task.priority),
+            "headers": {DJANGO_TASKS_PRIORITY_HEADER: task.priority},
         }
         if task.queue_name:
             send_task_kwargs["queue"] = task.queue_name
@@ -203,14 +226,16 @@ class CeleryBackend(BaseTaskBackend):
 
         date_done = async_result.date_done
 
+        completed = state in (SUCCESS, FAILURE, REVOKED)
+
         task_result: TaskResult = TaskResult(
             task=self._get_task_from_result(async_result),
             id=result_id,
             status=status,
             enqueued_at=None,
-            started_at=date_done if state in (SUCCESS, FAILURE) else None,
-            last_attempted_at=date_done if state in (SUCCESS, FAILURE) else None,
-            finished_at=date_done if state in (SUCCESS, FAILURE) else None,
+            started_at=None,
+            last_attempted_at=date_done if completed else None,
+            finished_at=date_done if completed else None,
             args=async_result.args or [],
             kwargs=async_result.kwargs or {},
             backend=self.alias,
@@ -246,7 +271,7 @@ class CeleryBackend(BaseTaskBackend):
                 f"Task {async_result.id} does not point to a Task ({task_name})"
             )
 
-        return task.using(backend=self.alias)  # type:ignore[no-any-return]
+        return task.using(backend=self.alias)  # type:ignore[return-value]
 
     def check(self, **kwargs: Any) -> Iterable[checks.CheckMessage]:
         yield from super().check(**kwargs)
@@ -265,4 +290,9 @@ class CeleryBackend(BaseTaskBackend):
             yield checks.Warning(
                 f"{backend_name} requires a Celery result backend for get_result() support",
                 hint="Configure CELERY_RESULT_BACKEND in your settings",
+            )
+        elif not celery_app.conf.result_extended:
+            yield checks.Warning(
+                f"{backend_name} requires CELERY_RESULT_EXTENDED=True for get_result() support",
+                hint="Set CELERY_RESULT_EXTENDED = True in your settings",
             )

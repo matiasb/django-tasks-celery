@@ -50,6 +50,11 @@ def get_task_id(context: TaskContext) -> str:
 
 
 @task(takes_context=True)
+def get_task_priority(context: TaskContext) -> int:
+    return context.task_result.task.priority
+
+
+@task(takes_context=True)
 def test_context(context: TaskContext, attempt: int) -> None:
     assert isinstance(context, TaskContext)
     assert context.attempt == attempt
