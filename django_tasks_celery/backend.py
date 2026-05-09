@@ -296,3 +296,13 @@ class CeleryBackend(BaseTaskBackend):
                 f"{backend_name} requires CELERY_RESULT_EXTENDED=True for get_result() support",
                 hint="Set CELERY_RESULT_EXTENDED = True in your settings",
             )
+
+        broker_url = celery_app.conf.broker_url or ""
+        if broker_url and not broker_url.startswith(("amqp://", "amqps://")):
+            yield checks.Warning(
+                f"{backend_name} priority support requires an AMQP-compatible broker",
+                hint=(
+                    "Priority queues are reliably supported only with RabbitMQ (amqp://). "
+                    "Other brokers may not respect task priority."
+                ),
+            )
