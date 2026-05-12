@@ -45,7 +45,7 @@ CELERY_MAX_PRIORITY = 9
 
 CELERY_STATUS_TO_RESULT_STATUS = {
     PENDING: TaskResultStatus.READY,
-    RECEIVED: TaskResultStatus.RUNNING,
+    RECEIVED: TaskResultStatus.READY,
     STARTED: TaskResultStatus.RUNNING,
     RETRY: TaskResultStatus.RUNNING,
     SUCCESS: TaskResultStatus.SUCCESSFUL,

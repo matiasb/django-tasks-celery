@@ -208,7 +208,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertIsNone(new_result.last_attempted_at)
         self.assertIsNone(new_result.finished_at)
 
-    def test_get_result_received_is_running(self) -> None:
+    def test_get_result_received_is_ready(self) -> None:
         from django.utils import timezone
 
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
@@ -224,7 +224,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
             new_result = default_task_backend.get_result(result.id)
 
-        self.assertEqual(new_result.status, TaskResultStatus.RUNNING)
+        self.assertEqual(new_result.status, TaskResultStatus.READY)
         self.assertIsNone(new_result.started_at)
         self.assertIsNone(new_result.last_attempted_at)
         self.assertIsNone(new_result.finished_at)
