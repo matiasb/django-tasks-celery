@@ -386,6 +386,30 @@ class CeleryBackendTestCase(SimpleTestCase):
             self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
             self.assertEqual(result.return_value, 75)
 
+    def test_broker_priority_warning(self) -> None:
+        errors = list(default_task_backend.check())
+        warnings = [e for e in errors if e.level < 40]
+        self.assertTrue(
+            any("priority" in str(w.msg).lower() for w in warnings),
+            f"Expected a priority warning for non-AMQP broker, got: {warnings}",
+        )
+
+    @override_settings(CELERY_BROKER_URL="amqp://localhost")
+    def test_no_priority_warning_with_amqp_broker(self) -> None:
+        from django_tasks_celery.backend import celery_app
+
+        celery_app.config_from_object("django.conf:settings", namespace="CELERY")
+        try:
+            errors = list(default_task_backend.check())
+        finally:
+            celery_app.config_from_object("django.conf:settings", namespace="CELERY")
+
+        warnings = [e for e in errors if e.level < 40]
+        self.assertFalse(
+            any("priority" in str(w.msg).lower() for w in warnings),
+            f"Expected no priority warning for AMQP broker, got: {warnings}",
+        )
+
 
 class CompatTestCase(SimpleTestCase):
     def test_compat_has_django_task(self) -> None:
