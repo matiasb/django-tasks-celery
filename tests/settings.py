@@ -30,3 +30,13 @@ TASKS = {
 CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
 CELERY_RESULT_EXTENDED = True
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {
+        "celery": {
+            "level": "CRITICAL",
+        },
+    },
+}
