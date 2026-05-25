@@ -285,6 +285,23 @@ class CeleryBackendTestCase(SimpleTestCase):
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):
             await default_task_backend.aget_result(str(uuid.uuid4()))
 
+    def test_get_result_without_backend_raises_improperly_configured(self) -> None:
+        from django.core.exceptions import ImproperlyConfigured
+
+        from django_tasks_celery.backend import celery_app
+
+        with override_settings(CELERY_RESULT_BACKEND="disabled"):
+            celery_app.config_from_object("django.conf:settings", namespace="CELERY")
+            try:
+                with self.assertRaisesMessage(
+                    ImproperlyConfigured, "Celery result backend is not configured"
+                ):
+                    default_task_backend.get_result(str(uuid.uuid4()))
+            finally:
+                celery_app.config_from_object(
+                    "django.conf:settings", namespace="CELERY"
+                )
+
     def test_get_result_populates_enqueued_at_from_side_channel(self) -> None:
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
