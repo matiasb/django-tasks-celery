@@ -28,7 +28,7 @@ from django_tasks.base import (
 )
 from django_tasks.exceptions import TaskResultDoesNotExist
 from django_tasks.signals import task_enqueued, task_finished, task_started
-from django_tasks.utils import get_random_id
+from django_tasks.utils import get_exception_traceback, get_module_path, get_random_id
 from typing_extensions import ParamSpec
 
 from .compat import TASK_CLASSES
@@ -212,7 +212,13 @@ class Task(BaseTask[P, T]):
                     )
                 else:
                     return_value = self.call(*args, **kwargs)
-            except Exception:
+            except Exception as exc:
+                task_result.errors.append(
+                    TaskError(
+                        exception_class_path=get_module_path(type(exc)),
+                        traceback=get_exception_traceback(exc),
+                    )
+                )
                 object.__setattr__(task_result, "status", TaskResultStatus.FAILED)
                 task_finished.send(backend_cls, task_result=task_result)
                 raise
@@ -312,8 +318,6 @@ class CeleryBackend(BaseTaskBackend):
 
         errors: list[TaskError] = []
         if state == FAILURE and async_result.result is not None:
-            from django_tasks.utils import get_module_path
-
             exc = async_result.result
             errors.append(
                 TaskError(
