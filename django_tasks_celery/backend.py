@@ -24,7 +24,7 @@ from django_tasks.base import (
     Task as BaseTask,
 )
 from django_tasks.exceptions import TaskResultDoesNotExist
-from django_tasks.signals import task_enqueued
+from django_tasks.signals import task_enqueued, task_finished, task_started
 from django_tasks.utils import get_random_id
 from typing_extensions import ParamSpec
 
@@ -80,70 +80,114 @@ def _unmap_priority(value: int) -> int:
 class Task(BaseTask[P, T]):
     """Celery proxy to the task in the current celery app task registry."""
 
+    def _build_task_result(
+        self,
+        request: Any,
+        args: tuple,
+        kwargs: dict,
+    ) -> "TaskResult[T]":
+        hostname = request.hostname or "unknown"
+        headers = request.headers or {}
+        celery_priority = (
+            request.delivery_info.get("priority", DEFAULT_TASK_PRIORITY)
+            if request.delivery_info
+            else DEFAULT_TASK_PRIORITY
+        )
+        priority = headers.get(
+            DJANGO_TASKS_PRIORITY_HEADER, _unmap_priority(celery_priority)
+        )
+
+        task_result = TaskResult[T](
+            task=self.using(
+                priority=priority,
+                queue_name=(
+                    request.delivery_info.get("routing_key", DEFAULT_TASK_QUEUE_NAME)
+                    if request.delivery_info
+                    else DEFAULT_TASK_QUEUE_NAME
+                ),
+                backend=self.backend,
+                run_after=request.eta,
+            ),
+            id=request.id,
+            status=TaskResultStatus.RUNNING,
+            enqueued_at=None,
+            started_at=None,
+            last_attempted_at=None,
+            finished_at=None,
+            args=list(args),
+            kwargs=kwargs,
+            backend=self.backend,
+            errors=[],
+            worker_ids=[hostname],
+        )
+
+        for _ in range(request.retries):
+            task_result.worker_ids.append(hostname)
+
+        return task_result
+
     def __post_init__(self) -> None:
         import functools
+        import inspect
 
-        if self.takes_context:
+        is_async = inspect.iscoroutinefunction(self.func)
 
-            @functools.wraps(self.func)
-            def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
-                from django_tasks.base import TaskContext
+        @functools.wraps(self.func)
+        def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
+            from django_tasks.base import TaskContext
 
-                request = celery_task_self.request
-                hostname = request.hostname or "unknown"
-                headers = request.headers or {}
-                celery_priority = (
-                    request.delivery_info.get("priority", DEFAULT_TASK_PRIORITY)
-                    if request.delivery_info
-                    else DEFAULT_TASK_PRIORITY
-                )
-                priority = headers.get(
-                    DJANGO_TASKS_PRIORITY_HEADER, _unmap_priority(celery_priority)
-                )
+            task_result = self._build_task_result(
+                celery_task_self.request, args, kwargs
+            )
+            backend_cls = type(self.get_backend())
 
-                # We build a synthetic TaskResult on the fly from the worker context
-                # without needing the result backend
-                task_result = TaskResult[
-                    T
-                ](
-                    task=self.using(
-                        priority=priority,
-                        queue_name=request.delivery_info.get(
-                            "routing_key", DEFAULT_TASK_QUEUE_NAME
+            if is_async:
+                import asyncio
+
+                async def _run_async() -> Any:
+                    task_started.send(backend_cls, task_result=task_result)
+                    try:
+                        if self.takes_context:
+                            return_value = await self.acall(
+                                TaskContext(task_result=task_result),  # type: ignore[arg-type]
+                                *args,
+                                **kwargs,
+                            )
+                        else:
+                            return_value = await self.acall(*args, **kwargs)
+                    except Exception:
+                        object.__setattr__(
+                            task_result, "status", TaskResultStatus.FAILED
                         )
-                        if request.delivery_info
-                        else DEFAULT_TASK_QUEUE_NAME,
-                        backend=self.backend,
-                        run_after=request.eta,
-                    ),
-                    id=request.id,
-                    status=TaskResultStatus.RUNNING,
-                    enqueued_at=None,
-                    started_at=None,  # Cannot determine start time precisely without additional context
-                    last_attempted_at=None,
-                    finished_at=None,
-                    args=list(args),
-                    kwargs=kwargs,
-                    backend=self.backend,
-                    errors=[],
-                    worker_ids=[hostname],
-                )
+                        task_finished.send(backend_cls, task_result=task_result)
+                        raise
+                    object.__setattr__(
+                        task_result, "status", TaskResultStatus.SUCCESSFUL
+                    )
+                    task_finished.send(backend_cls, task_result=task_result)
+                    return return_value
 
-                # Synthesize attempt from retries + 1 (first run is retries=0)
-                # TaskContext internally counts len(worker_ids) for attempts, so let's adjust array size
-                for _ in range(request.retries):
-                    task_result.worker_ids.append(hostname)
+                return asyncio.run(_run_async())
 
-                context = TaskContext(task_result=task_result)
-                args = (context, *args)
-                return self.call(*args, **kwargs)
+            task_started.send(backend_cls, task_result=task_result)
+            try:
+                if self.takes_context:
+                    return_value = self.call(
+                        TaskContext(task_result=task_result),  # type: ignore[arg-type]
+                        *args,
+                        **kwargs,
+                    )
+                else:
+                    return_value = self.call(*args, **kwargs)
+            except Exception:
+                object.__setattr__(task_result, "status", TaskResultStatus.FAILED)
+                task_finished.send(backend_cls, task_result=task_result)
+                raise
+            object.__setattr__(task_result, "status", TaskResultStatus.SUCCESSFUL)
+            task_finished.send(backend_cls, task_result=task_result)
+            return return_value
 
-            # register task with Celery app
-            # https://docs.celeryq.dev/en/stable/django/first-steps-with-django.html#using-the-shared-task-decorator
-            shared_task(name=self.module_path, bind=True)(wrapper)
-        else:
-            # register task with Celery app
-            shared_task(name=self.module_path)(self.call)
+        shared_task(name=self.module_path, bind=True)(wrapper)
 
         return super().__post_init__()
 
@@ -164,6 +208,31 @@ class CeleryBackend(BaseTaskBackend):
         self.validate_task(task)
 
         task_id = get_random_id()
+
+        # Pre-populate the result backend with the task name so get_result()
+        # can reconstruct the Task object before the worker has run.
+        # Must happen before send_task() to avoid a race where the worker
+        # stores SUCCESS before we store PENDING.
+        if (
+            celery_app.conf.result_backend
+            and celery_app.conf.result_backend != "disabled"
+            and celery_app.conf.result_extended
+        ):
+            from types import SimpleNamespace
+
+            celery_app.backend.store_result(
+                task_id,
+                None,
+                "PENDING",
+                request=SimpleNamespace(
+                    task=task.module_path,
+                    args=list(args),
+                    kwargs=kwargs,
+                    hostname=None,
+                    retries=0,
+                    delivery_info={},
+                ),
+            )
 
         send_task_kwargs: dict[str, Any] = {
             "task_id": task_id,

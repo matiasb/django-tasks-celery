@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import cast
 from unittest.mock import patch
@@ -15,6 +16,8 @@ from django_tasks_celery import compat
 from django_tasks_celery.app import app
 from django_tasks_celery.backend import CeleryBackend, _map_priority, _unmap_priority
 from tests import tasks as test_tasks
+
+logger = logging.getLogger(__name__)
 
 
 class CeleryBackendTestCase(SimpleTestCase):
@@ -409,6 +412,91 @@ class CeleryBackendTestCase(SimpleTestCase):
             any("priority" in str(w.msg).lower() for w in warnings),
             f"Expected no priority warning for AMQP broker, got: {warnings}",
         )
+
+    def test_get_result_pending_returns_ready(self) -> None:
+        result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
+
+        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+            mock_async_result = mock_async_result_cls.return_value
+            mock_async_result.id = result.id
+            # enqueue() pre-stores the task name in the result backend, so name
+            # is populated even in PENDING state
+            mock_async_result.name = test_tasks.noop_task.module_path
+            mock_async_result.state = "PENDING"
+            mock_async_result.result = None
+            mock_async_result.date_done = None
+            mock_async_result.args = []
+            mock_async_result.kwargs = {}
+
+            pending_result = default_task_backend.get_result(result.id)
+
+        self.assertEqual(pending_result.id, result.id)
+        self.assertEqual(pending_result.status, TaskResultStatus.READY)
+        self.assertEqual(pending_result.task, test_tasks.noop_task)
+
+    def test_task_started_signal_fired(self) -> None:
+        from django_tasks.signals import task_started
+
+        received: list = []
+
+        def handler(sender, task_result, **kw):  # type: ignore[no-untyped-def]
+            received.append(task_result)
+
+        task_started.connect(handler)
+        try:
+            with start_worker(app, perform_ping_check=False):
+                result = test_tasks.noop_task.enqueue()
+                AsyncResult(result.id, app=app).get(timeout=2)
+        finally:
+            task_started.disconnect(handler)
+
+        matching = [r for r in received if r.id == result.id]
+        self.assertEqual(len(matching), 1)
+
+    def test_task_finished_signal_fired_on_success(self) -> None:
+        from django_tasks.signals import task_finished
+
+        received: list = []
+
+        def handler(sender, task_result, **kw):  # type: ignore[no-untyped-def]
+            received.append(task_result)
+
+        task_finished.connect(handler)
+        try:
+            with start_worker(app, perform_ping_check=False):
+                result = test_tasks.noop_task.enqueue()
+                AsyncResult(result.id, app=app).get(timeout=2)
+        finally:
+            task_finished.disconnect(handler)
+
+        matching = [r for r in received if r.id == result.id]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0].status, TaskResultStatus.SUCCESSFUL)
+
+    def test_task_finished_signal_fired_on_failure(self) -> None:
+        from django_tasks.signals import task_finished
+
+        received: list = []
+
+        def handler(sender, task_result, **kw):  # type: ignore[no-untyped-def]
+            received.append(task_result)
+
+        task_finished.connect(handler)
+        try:
+            with start_worker(app, perform_ping_check=False):
+                result = test_tasks.failing_task_value_error.enqueue()
+                try:
+                    AsyncResult(result.id, app=app).get(timeout=2)
+                except Exception:
+                    # Expected failure
+                    logger.exception("Task failed")
+                    pass
+        finally:
+            task_finished.disconnect(handler)
+
+        matching = [r for r in received if r.id == result.id]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0].status, TaskResultStatus.FAILED)
 
 
 class CompatTestCase(SimpleTestCase):
