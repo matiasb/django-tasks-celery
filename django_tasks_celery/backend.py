@@ -1,4 +1,5 @@
 import functools
+import json
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any, TypeVar
@@ -28,7 +29,12 @@ from django_tasks.base import (
 )
 from django_tasks.exceptions import TaskResultDoesNotExist
 from django_tasks.signals import task_enqueued, task_finished, task_started
-from django_tasks.utils import get_exception_traceback, get_module_path, get_random_id
+from django_tasks.utils import (
+    get_exception_traceback,
+    get_module_path,
+    get_random_id,
+    normalize_json,
+)
 from typing_extensions import ParamSpec
 
 from .compat import TASK_CLASSES
@@ -58,6 +64,7 @@ CELERY_STATUS_TO_RESULT_STATUS = {
 
 DJANGO_TASKS_PRIORITY_HEADER = "django_tasks_priority"
 STARTED_AT_KEY_PREFIX = b"django-tasks-celery-started-at:"
+ENQUEUE_INFO_KEY_PREFIX = b"django-tasks-celery-enqueue:"
 
 
 def _result_backend_enabled() -> bool:
@@ -65,12 +72,12 @@ def _result_backend_enabled() -> bool:
     return bool(backend) and backend != "disabled"
 
 
-def _supports_started_at_persistence() -> bool:
-    """`started_at` is persisted via a side-channel key in the result backend.
+def _supports_side_channel() -> bool:
+    """Side-channel keys live in the Celery result backend.
 
-    Requires a key-value-style backend (Redis, memcached, cache, filesystem,
-    MongoDB). Database and RPC backends don't expose set/get and so don't
-    persist `started_at`.
+    They require a key-value-style backend (Redis, memcached, cache,
+    filesystem, MongoDB). Database (db+://) and RPC (rpc://) backends
+    don't expose set/get, so side-channel data is unavailable there.
     """
     return _result_backend_enabled() and isinstance(
         celery_app.backend, KeyValueStoreBackend
@@ -81,14 +88,18 @@ def _started_at_key(task_id: str) -> bytes:
     return STARTED_AT_KEY_PREFIX + task_id.encode()
 
 
+def _enqueue_info_key(task_id: str) -> bytes:
+    return ENQUEUE_INFO_KEY_PREFIX + task_id.encode()
+
+
 def _store_started_at(task_id: str, started_at: datetime) -> None:
-    if not _supports_started_at_persistence():
+    if not _supports_side_channel():
         return
     celery_app.backend.set(_started_at_key(task_id), started_at.isoformat().encode())
 
 
 def _read_started_at(task_id: str) -> datetime | None:
-    if not _supports_started_at_persistence():
+    if not _supports_side_channel():
         return None
     raw = celery_app.backend.get(_started_at_key(task_id))
     if not raw:
@@ -96,6 +107,43 @@ def _read_started_at(task_id: str) -> datetime | None:
     if isinstance(raw, bytes):
         raw = raw.decode()
     return datetime.fromisoformat(raw)
+
+
+def _store_enqueue_info(
+    task_id: str,
+    task_module_path: str,
+    args: Any,
+    kwargs: Any,
+    enqueued_at: datetime,
+) -> None:
+    """Persist task name, args, kwargs, and enqueued_at on enqueue.
+
+    Lets get_result() reconstruct the Task before the worker has stored a
+    result (and even without CELERY_RESULT_EXTENDED), and surface
+    enqueued_at on TaskResult — Celery's result backend doesn't store it.
+    """
+    if not _supports_side_channel():
+        return
+    payload = json.dumps(
+        {
+            "name": task_module_path,
+            "args": normalize_json(list(args)),
+            "kwargs": normalize_json(dict(kwargs)),
+            "enqueued_at": enqueued_at.isoformat(),
+        }
+    ).encode()
+    celery_app.backend.set(_enqueue_info_key(task_id), payload)
+
+
+def _read_enqueue_info(task_id: str) -> dict[str, Any] | None:
+    if not _supports_side_channel():
+        return None
+    raw = celery_app.backend.get(_enqueue_info_key(task_id))
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    return json.loads(raw)  # type: ignore[no-any-return]
 
 
 def _map_priority(value: int) -> int:
@@ -247,31 +295,14 @@ class CeleryBackend(BaseTaskBackend):
         self.validate_task(task)
 
         task_id = get_random_id()
+        enqueued_at = timezone.now()
 
-        # Pre-populate the result backend with the task name so get_result()
-        # can reconstruct the Task object before the worker has run.
-        # Must happen before send_task() to avoid a race where the worker
-        # stores SUCCESS before we store PENDING.
-        if (
-            celery_app.conf.result_backend
-            and celery_app.conf.result_backend != "disabled"
-            and celery_app.conf.result_extended
-        ):
-            from types import SimpleNamespace
-
-            celery_app.backend.store_result(
-                task_id,
-                None,
-                "PENDING",
-                request=SimpleNamespace(
-                    task=task.module_path,
-                    args=list(args),
-                    kwargs=kwargs,
-                    hostname=None,
-                    retries=0,
-                    delivery_info={},
-                ),
-            )
+        # Persist enqueue info in a side-channel key so get_result() can
+        # reconstruct the Task and surface enqueued_at before the worker
+        # has stored a result — and even when CELERY_RESULT_EXTENDED is
+        # False. Must happen before send_task() to avoid a race where the
+        # worker writes its own result first.
+        _store_enqueue_info(task_id, task.module_path, args, kwargs, enqueued_at)
 
         send_task_kwargs: dict[str, Any] = {
             "task_id": task_id,
@@ -293,7 +324,7 @@ class CeleryBackend(BaseTaskBackend):
             task=task,
             id=task_id,
             status=TaskResultStatus.READY,
-            enqueued_at=timezone.now(),
+            enqueued_at=enqueued_at,
             started_at=None,
             last_attempted_at=None,
             finished_at=None,
@@ -315,6 +346,16 @@ class CeleryBackend(BaseTaskBackend):
         async_result = AsyncResult(result_id)
         state = async_result.state
         status = CELERY_STATUS_TO_RESULT_STATUS.get(state, TaskResultStatus.READY)
+
+        enqueue_info = _read_enqueue_info(result_id) or {}
+
+        # Prefer Celery's view (populated once the worker has stored the
+        # result with CELERY_RESULT_EXTENDED=True) and fall back to the
+        # side-channel info we wrote on enqueue. This covers the pre-worker
+        # window as well as result_extended=False setups.
+        task_name = async_result.name or enqueue_info.get("name")
+        if task_name is None:
+            raise TaskResultDoesNotExist(result_id)
 
         errors: list[TaskError] = []
         if state == FAILURE and async_result.result is not None:
@@ -339,6 +380,10 @@ class CeleryBackend(BaseTaskBackend):
 
         started_at = _read_started_at(result_id)
 
+        enqueued_at = None
+        if "enqueued_at" in enqueue_info:
+            enqueued_at = datetime.fromisoformat(enqueue_info["enqueued_at"])
+
         # Populate worker_ids from result_extended; repeat per attempt so
         # `attempts` (== len(worker_ids)) reflects retries.
         worker_ids: list[str] = []
@@ -347,15 +392,15 @@ class CeleryBackend(BaseTaskBackend):
             worker_ids = [async_result.worker] * (retries + 1)
 
         task_result: TaskResult = TaskResult(
-            task=self._get_task_from_result(async_result),
+            task=self._resolve_task(task_name, result_id),
             id=result_id,
             status=status,
-            enqueued_at=None,
+            enqueued_at=enqueued_at,
             started_at=started_at,
             last_attempted_at=started_at or (date_done if completed else None),
             finished_at=date_done if completed else None,
-            args=async_result.args or [],
-            kwargs=async_result.kwargs or {},
+            args=async_result.args or enqueue_info.get("args") or [],
+            kwargs=async_result.kwargs or enqueue_info.get("kwargs") or {},
             backend=self.alias,
             errors=errors,
             worker_ids=worker_ids,
@@ -366,27 +411,15 @@ class CeleryBackend(BaseTaskBackend):
 
         return task_result
 
-    def _get_task_from_result(self, async_result: AsyncResult) -> Task:
+    def _resolve_task(self, task_name: str, result_id: str) -> Task:
+        from django.core.exceptions import SuspiciousOperation
         from django.utils.module_loading import import_string
-
-        if not celery_app.conf.result_extended:
-            # we cannot reverse the task without the result extended information
-            # which include the task name
-            raise ValueError(
-                "You need to set CELERY_RESULT_EXTENDED=True in your settings"
-            )
-
-        task_name = async_result.name
-        if task_name is None:
-            raise TaskResultDoesNotExist(async_result.id)
 
         task = import_string(task_name)
 
         if not isinstance(task, TASK_CLASSES):
-            from django.core.exceptions import SuspiciousOperation
-
             raise SuspiciousOperation(
-                f"Task {async_result.id} does not point to a Task ({task_name})"
+                f"Task {result_id} does not point to a Task ({task_name})"
             )
 
         return task.using(backend=self.alias)  # type:ignore[return-value]
@@ -411,8 +444,13 @@ class CeleryBackend(BaseTaskBackend):
             )
         elif not celery_app.conf.result_extended:
             yield checks.Warning(
-                f"{backend_name} requires CELERY_RESULT_EXTENDED=True for get_result() support",
-                hint="Set CELERY_RESULT_EXTENDED = True in your settings",
+                f"{backend_name} recommends CELERY_RESULT_EXTENDED=True for full TaskResult fidelity",
+                hint=(
+                    "Without CELERY_RESULT_EXTENDED, worker_ids and attempts "
+                    "on completed tasks will be empty. Task name, args, and "
+                    "kwargs still work via the side-channel on key-value "
+                    "result backends."
+                ),
             )
 
         broker_url = celery_app.conf.broker_url or ""
