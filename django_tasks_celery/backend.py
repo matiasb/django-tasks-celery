@@ -7,7 +7,6 @@ from typing import Any, TypeVar
 from celery import Task as CeleryTask
 from celery import current_app as celery_app
 from celery import shared_task
-from celery.app import default_app
 from celery.backends.base import KeyValueStoreBackend
 from celery.result import AsyncResult
 from celery.states import FAILURE, PENDING, RECEIVED, RETRY, REVOKED, STARTED, SUCCESS
@@ -38,12 +37,6 @@ from django_tasks.utils import (
 from typing_extensions import ParamSpec
 
 from .compat import TASK_CLASSES
-
-if not default_app:
-    from django_tasks_celery.app import app as celery_app
-
-    celery_app.set_default()
-
 
 T = TypeVar("T")
 P = ParamSpec("P")

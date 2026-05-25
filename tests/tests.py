@@ -626,6 +626,32 @@ class CeleryBackendTestCase(SimpleTestCase):
         )
 
 
+class AppConfigTestCase(SimpleTestCase):
+    def test_appconfig_is_discovered(self) -> None:
+        from django.apps import apps
+
+        from django_tasks_celery.apps import DjangoTasksCeleryConfig
+
+        self.assertIsInstance(
+            apps.get_app_config("django_tasks_celery"),
+            DjangoTasksCeleryConfig,
+        )
+
+    def test_backend_module_does_not_set_default_app(self) -> None:
+        """Re-importing the backend module must not mutate global Celery
+        state (set_default / set_current). The fallback now lives in
+        AppConfig.ready()."""
+        import importlib
+
+        from celery._state import _tls
+
+        before_default = _tls.current_app
+        importlib.reload(importlib.import_module("django_tasks_celery.backend"))
+        after_default = _tls.current_app
+
+        self.assertIs(before_default, after_default)
+
+
 class CompatTestCase(SimpleTestCase):
     def test_compat_has_django_task(self) -> None:
         self.assertIn(Task, compat.TASK_CLASSES)
