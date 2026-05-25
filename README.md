@@ -55,6 +55,16 @@ Start a Celery worker as usual:
 DJANGO_SETTINGS_MODULE=<your_project.settings> celery -A django_tasks_celery.app worker -l INFO
 ```
 
+### Task Names in Celery
+
+Django Tasks are registered in Celery's task registry under a namespaced name to avoid collisions with unrelated `@shared_task` registrations that may share the same dotted path. The wire format is:
+
+```
+django_tasks:<module_path>
+```
+
+For example, a `@task()`-decorated `my_app.tasks.send_email` is registered (and routed) as `django_tasks:my_app.tasks.send_email`. You'll see this name in `celery inspect registered`, worker logs, and any external monitoring (Flower, etc.). This is the name to use in Celery routing rules (`task_routes`) if you need per-task overrides.
+
 ### Priorities
 
 Task priorities are mapped from the Django Tasks range (`-100` to `100`) to Celery's range (`0` to `9`) using a linear scale. This requires a broker that supports priority queues (e.g., RabbitMQ).

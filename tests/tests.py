@@ -14,7 +14,12 @@ from django_tasks.exceptions import InvalidTaskError, TaskResultDoesNotExist
 
 from django_tasks_celery import compat
 from django_tasks_celery.app import app
-from django_tasks_celery.backend import CeleryBackend, _map_priority, _unmap_priority
+from django_tasks_celery.backend import (
+    CeleryBackend,
+    _map_priority,
+    _to_celery_name,
+    _unmap_priority,
+)
 from tests import tasks as test_tasks
 
 logger = logging.getLogger(__name__)
@@ -84,7 +89,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         self.assertEqual(result.status, TaskResultStatus.READY)
         mock_send_task.assert_called_once_with(
-            test_tasks.noop_task.module_path,
+            _to_celery_name(test_tasks.noop_task.module_path),
             args=(),
             kwargs={},
             task_id=result.id,
@@ -323,8 +328,9 @@ class CeleryBackendTestCase(SimpleTestCase):
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):
             await default_task_backend.aget_result("123")
 
-    def test_send_task_called_with_module_path(self) -> None:
-        """Verify that enqueue uses send_task with the task's module_path."""
+    def test_send_task_called_with_namespaced_name(self) -> None:
+        """Verify that enqueue uses send_task with the namespaced task name
+        so we don't collide with unrelated @shared_task registrations."""
         with patch(
             "django_tasks_celery.backend.celery_app.send_task"
         ) as mock_send_task:
@@ -332,18 +338,41 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         mock_send_task.assert_called_once()
         call_args = mock_send_task.call_args
-        self.assertEqual(call_args.args[0], test_tasks.noop_task.module_path)
+        self.assertEqual(
+            call_args.args[0], _to_celery_name(test_tasks.noop_task.module_path)
+        )
         self.assertEqual(call_args.kwargs["task_id"], result.id)
+
+    def test_task_name_namespace_avoids_collision(self) -> None:
+        """A plain @shared_task registered at the same dotted path as a
+        Django Task must not overwrite the Django Task in Celery's
+        registry, because we namespace ours under `django_tasks:`."""
+        from celery import shared_task
+
+        @shared_task(name=test_tasks.noop_task.module_path)  # type:ignore[untyped-decorator]
+        def colliding_celery_task() -> None:
+            pass
+
+        try:
+            celery_name = _to_celery_name(test_tasks.noop_task.module_path)
+            self.assertIn(celery_name, app.tasks)
+            self.assertIn(test_tasks.noop_task.module_path, app.tasks)
+            self.assertIsNot(
+                app.tasks[celery_name], app.tasks[test_tasks.noop_task.module_path]
+            )
+        finally:
+            app.tasks.pop(test_tasks.noop_task.module_path, None)
 
     def test_using_does_not_reregister_celery_task(self) -> None:
         """`task.using(...)` should not re-register a Celery task each call."""
-        registered = app.tasks[test_tasks.noop_task.module_path]
+        celery_name = _to_celery_name(test_tasks.noop_task.module_path)
+        registered = app.tasks[celery_name]
 
         test_tasks.noop_task.using(priority=50)
         test_tasks.noop_task.using(queue_name="queue-1")
         test_tasks.noop_task.using(priority=10, queue_name="queue-1")
 
-        self.assertIs(app.tasks[test_tasks.noop_task.module_path], registered)
+        self.assertIs(app.tasks[celery_name], registered)
 
     @override_settings(
         TASKS={

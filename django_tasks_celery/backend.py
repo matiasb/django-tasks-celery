@@ -66,6 +66,25 @@ DJANGO_TASKS_PRIORITY_HEADER = "django_tasks_priority"
 STARTED_AT_KEY_PREFIX = b"django-tasks-celery-started-at:"
 ENQUEUE_INFO_KEY_PREFIX = b"django-tasks-celery-enqueue:"
 
+# Prefix used when registering Django Tasks in Celery's task registry, so
+# they don't collide with unrelated @shared_task registrations that may
+# share the same dotted path (e.g., a user-defined `tasks.send_email` as
+# both a plain Celery task and a Django Task).
+CELERY_TASK_NAME_PREFIX = "django_tasks:"
+
+
+def _to_celery_name(module_path: str) -> str:
+    return f"{CELERY_TASK_NAME_PREFIX}{module_path}"
+
+
+def _to_module_path(task_name: str) -> str:
+    """Strip the django-tasks-celery namespace prefix from a Celery task
+    name to recover the importable module path. Leaves unprefixed names
+    alone so the side-channel (which stores raw module paths) round-trips."""
+    if task_name.startswith(CELERY_TASK_NAME_PREFIX):
+        return task_name[len(CELERY_TASK_NAME_PREFIX) :]
+    return task_name
+
 
 def _result_backend_enabled() -> bool:
     backend = celery_app.conf.result_backend
@@ -223,7 +242,8 @@ class Task(BaseTask[P, T]):
         # (and rebuild the wrapper closure) on every enqueue path that uses
         # .using(). `func` and `takes_context` don't change across .using()
         # calls, so the first-registered wrapper is correct.
-        if self.module_path in celery_app.tasks:
+        celery_name = _to_celery_name(self.module_path)
+        if celery_name in celery_app.tasks:
             return super().__post_init__()
 
         @functools.wraps(self.func)
@@ -274,7 +294,7 @@ class Task(BaseTask[P, T]):
             task_finished.send(backend_cls, task_result=task_result)
             return return_value
 
-        shared_task(name=self.module_path, bind=True)(wrapper)
+        shared_task(name=celery_name, bind=True)(wrapper)
 
         return super().__post_init__()
 
@@ -314,7 +334,7 @@ class CeleryBackend(BaseTaskBackend):
             send_task_kwargs["queue"] = task.queue_name
 
         celery_app.send_task(
-            task.module_path,
+            _to_celery_name(task.module_path),
             args=args,
             kwargs=kwargs,
             **send_task_kwargs,
@@ -415,7 +435,10 @@ class CeleryBackend(BaseTaskBackend):
         from django.core.exceptions import SuspiciousOperation
         from django.utils.module_loading import import_string
 
-        task = import_string(task_name)
+        # task_name may come from async_result.name (prefixed by us at
+        # registration) or from the side-channel (raw module path).
+        module_path = _to_module_path(task_name)
+        task = import_string(module_path)
 
         if not isinstance(task, TASK_CLASSES):
             raise SuspiciousOperation(
