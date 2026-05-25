@@ -61,7 +61,18 @@ Task priorities are mapped from the Django Tasks range (`-100` to `100`) to Cele
 
 ### Result Backend
 
-A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks. Also, you will need to set [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended).
+A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks. Also, you will need to set [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended) so the backend can populate `args`, `kwargs`, `worker_ids`, and `attempts` on `TaskResult`.
+
+#### `TaskResult` field availability
+
+The Django Tasks `TaskResult` exposes several fields that depend on what Celery's result backend can store:
+
+- **`status`** while a task is running: the backend explicitly marks the task as `STARTED` (mapped to `RUNNING`) from inside the worker, so this works regardless of the [`CELERY_TASK_TRACK_STARTED`](https://docs.celeryq.dev/en/main/userguide/configuration.html#task-track-started) setting.
+- **`finished_at`** and **`last_attempted_at`** (for completed tasks): come from Celery's `date_done`. Always available with a configured result backend.
+- **`errors[*].traceback`**: uses the worker's serialized traceback string (`AsyncResult.traceback`).
+- **`worker_ids`** and **`attempts`**: require `CELERY_RESULT_EXTENDED=True` so the result meta carries `worker` and `retries`.
+- **`started_at`**: persisted via a side-channel key in the result backend so it survives Celery overwriting the meta with the return value on completion. This requires a **key-value-style result backend** — Redis, memcached, cache (`cache+...://`), filesystem, and MongoDB are supported. With the database (`db+...://`) or RPC (`rpc://`) backends, `started_at` will remain `None`.
+- **`enqueued_at`**: currently always `None` from `get_result()` (Celery doesn't persist the enqueue time).
 
 ### Deferred Tasks
 

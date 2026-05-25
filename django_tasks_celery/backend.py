@@ -1,11 +1,13 @@
 import functools
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any, TypeVar
 
 from celery import Task as CeleryTask
 from celery import current_app as celery_app
 from celery import shared_task
 from celery.app import default_app
+from celery.backends.base import KeyValueStoreBackend
 from celery.result import AsyncResult
 from celery.states import FAILURE, PENDING, RECEIVED, RETRY, REVOKED, STARTED, SUCCESS
 from django.apps import apps
@@ -55,6 +57,45 @@ CELERY_STATUS_TO_RESULT_STATUS = {
 }
 
 DJANGO_TASKS_PRIORITY_HEADER = "django_tasks_priority"
+STARTED_AT_KEY_PREFIX = b"django-tasks-celery-started-at:"
+
+
+def _result_backend_enabled() -> bool:
+    backend = celery_app.conf.result_backend
+    return bool(backend) and backend != "disabled"
+
+
+def _supports_started_at_persistence() -> bool:
+    """`started_at` is persisted via a side-channel key in the result backend.
+
+    Requires a key-value-style backend (Redis, memcached, cache, filesystem,
+    MongoDB). Database and RPC backends don't expose set/get and so don't
+    persist `started_at`.
+    """
+    return _result_backend_enabled() and isinstance(
+        celery_app.backend, KeyValueStoreBackend
+    )
+
+
+def _started_at_key(task_id: str) -> bytes:
+    return STARTED_AT_KEY_PREFIX + task_id.encode()
+
+
+def _store_started_at(task_id: str, started_at: datetime) -> None:
+    if not _supports_started_at_persistence():
+        return
+    celery_app.backend.set(_started_at_key(task_id), started_at.isoformat().encode())
+
+
+def _read_started_at(task_id: str) -> datetime | None:
+    if not _supports_started_at_persistence():
+        return None
+    raw = celery_app.backend.get(_started_at_key(task_id))
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    return datetime.fromisoformat(raw)
 
 
 def _map_priority(value: int) -> int:
@@ -141,10 +182,22 @@ class Task(BaseTask[P, T]):
         def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
             from django_tasks.base import TaskContext
 
+            started_at = timezone.now()
             task_result = self._build_task_result(
                 celery_task_self.request, args, kwargs
             )
+            object.__setattr__(task_result, "started_at", started_at)
+            object.__setattr__(task_result, "last_attempted_at", started_at)
             backend_cls = type(self.get_backend())
+
+            # Mark STARTED so get_result() can surface RUNNING status
+            # without requiring CELERY_TASK_TRACK_STARTED=True, and persist
+            # started_at in a side-channel key so it survives the result
+            # meta being overwritten when Celery stores the return value /
+            # exception on completion.
+            if _result_backend_enabled():
+                celery_task_self.update_state(state=STARTED)
+                _store_started_at(celery_task_self.request.id, started_at)
 
             task_started.send(backend_cls, task_result=task_result)
             try:
@@ -259,13 +312,16 @@ class CeleryBackend(BaseTaskBackend):
 
         errors: list[TaskError] = []
         if state == FAILURE and async_result.result is not None:
-            exc = async_result.result
-            from django_tasks.utils import get_exception_traceback, get_module_path
+            from django_tasks.utils import get_module_path
 
+            exc = async_result.result
             errors.append(
                 TaskError(
                     exception_class_path=get_module_path(type(exc)),
-                    traceback=get_exception_traceback(exc),
+                    # Use the worker's serialized traceback string rather
+                    # than re-formatting the deserialized exception (whose
+                    # __traceback__ is lost in transit).
+                    traceback=async_result.traceback or "",
                 )
             )
 
@@ -277,19 +333,28 @@ class CeleryBackend(BaseTaskBackend):
 
         completed = state in (SUCCESS, FAILURE, REVOKED)
 
+        started_at = _read_started_at(result_id)
+
+        # Populate worker_ids from result_extended; repeat per attempt so
+        # `attempts` (== len(worker_ids)) reflects retries.
+        worker_ids: list[str] = []
+        if async_result.worker:
+            retries = async_result.retries or 0
+            worker_ids = [async_result.worker] * (retries + 1)
+
         task_result: TaskResult = TaskResult(
             task=self._get_task_from_result(async_result),
             id=result_id,
             status=status,
             enqueued_at=None,
-            started_at=None,
-            last_attempted_at=date_done if completed else None,
+            started_at=started_at,
+            last_attempted_at=started_at or (date_done if completed else None),
             finished_at=date_done if completed else None,
             args=async_result.args or [],
             kwargs=async_result.kwargs or {},
             backend=self.alias,
             errors=errors,
-            worker_ids=[],
+            worker_ids=worker_ids,
         )
 
         if return_value is not None:
