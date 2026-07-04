@@ -200,6 +200,13 @@ class Task(BaseTask[P, T]):
             DJANGO_TASKS_PRIORITY_HEADER, _unmap_priority(celery_priority)
         )
 
+        # On the worker side Celery delivers `eta` as an ISO-8601 string, but
+        # django-tasks expects an aware datetime for run_after (validate_task
+        # calls timezone.is_aware on it). Parse it back; leave None as-is.
+        run_after = request.eta
+        if isinstance(run_after, str):
+            run_after = datetime.fromisoformat(run_after)
+
         task_result = TaskResult[T](
             task=self.using(
                 priority=priority,
@@ -209,7 +216,7 @@ class Task(BaseTask[P, T]):
                     else DEFAULT_TASK_QUEUE_NAME
                 ),
                 backend=self.backend,
-                run_after=request.eta,
+                run_after=run_after,
             ),
             id=request.id,
             status=TaskResultStatus.RUNNING,
