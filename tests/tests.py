@@ -280,10 +280,40 @@ class CeleryBackendTestCase(SimpleTestCase):
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):
             await default_task_backend.aget_result(str(uuid.uuid4()))
 
-    def test_get_result_missing_extend_setting(self) -> None:
-        with override_settings(CELERY_RESULT_EXTENDED=False):
-            with self.assertRaises(ValueError):
-                default_task_backend.get_result(str(uuid.uuid4()))
+    def test_get_result_populates_enqueued_at_from_side_channel(self) -> None:
+        result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
+
+        new_result = default_task_backend.get_result(result.id)
+
+        self.assertIsNotNone(new_result.enqueued_at)
+        self.assertEqual(new_result.enqueued_at, result.enqueued_at)
+
+    def test_get_result_works_without_result_extended(self) -> None:
+        """Side-channel allows task reconstruction even without
+        CELERY_RESULT_EXTENDED, by carrying the task name and args/kwargs."""
+        result = default_task_backend.enqueue(test_tasks.noop_task, [1], {"two": 3})
+
+        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+            mock_async_result = mock_async_result_cls.return_value
+            # Without result_extended, Celery returns name=None / args=None /
+            # kwargs=None for completed tasks too.
+            mock_async_result.name = None
+            mock_async_result.state = "PENDING"
+            mock_async_result.result = None
+            mock_async_result.date_done = None
+            mock_async_result.args = None
+            mock_async_result.kwargs = None
+            mock_async_result.worker = None
+            mock_async_result.retries = 0
+            mock_async_result.traceback = None
+
+            new_result = default_task_backend.get_result(result.id)
+
+        self.assertEqual(new_result.id, result.id)
+        self.assertEqual(new_result.task, test_tasks.noop_task)
+        self.assertEqual(new_result.args, [1])
+        self.assertEqual(new_result.kwargs, {"two": 3})
+        self.assertIsNotNone(new_result.enqueued_at)
 
     def test_invalid_uuid(self) -> None:
         with self.assertRaises((TaskResultDoesNotExist, SuspiciousOperation)):

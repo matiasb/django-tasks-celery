@@ -72,7 +72,7 @@ The Django Tasks `TaskResult` exposes several fields that depend on what Celery'
 - **`errors[*].traceback`**: uses the worker's serialized traceback string (`AsyncResult.traceback`).
 - **`worker_ids`** and **`attempts`**: require `CELERY_RESULT_EXTENDED=True` so the result meta carries `worker` and `retries`.
 - **`started_at`**: persisted via a side-channel key in the result backend so it survives Celery overwriting the meta with the return value on completion. This requires a **key-value-style result backend** — Redis, memcached, cache (`cache+...://`), filesystem, and MongoDB are supported. With the database (`db+...://`) or RPC (`rpc://`) backends, `started_at` will remain `None`.
-- **`enqueued_at`**: currently always `None` from `get_result()` (Celery doesn't persist the enqueue time).
+- **`enqueued_at`** and pre-worker **`task` / `args` / `kwargs`**: persisted via the same side-channel on `enqueue()`. This is what lets `get_result()` reconstruct the Task before the worker has stored anything — and what lets task reconstruction work even when `CELERY_RESULT_EXTENDED=False`. Same KV-backend requirement as `started_at`; on database/RPC backends, `enqueued_at` will be `None` and `get_result()` will only work after the worker has stored the result (with `CELERY_RESULT_EXTENDED=True`).
 
 ### Deferred Tasks
 
