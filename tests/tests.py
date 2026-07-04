@@ -305,6 +305,16 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(call_args.args[0], test_tasks.noop_task.module_path)
         self.assertEqual(call_args.kwargs["task_id"], result.id)
 
+    def test_using_does_not_reregister_celery_task(self) -> None:
+        """`task.using(...)` should not re-register a Celery task each call."""
+        registered = app.tasks[test_tasks.noop_task.module_path]
+
+        test_tasks.noop_task.using(priority=50)
+        test_tasks.noop_task.using(queue_name="queue-1")
+        test_tasks.noop_task.using(priority=10, queue_name="queue-1")
+
+        self.assertIs(app.tasks[test_tasks.noop_task.module_path], registered)
+
     @override_settings(
         TASKS={
             "default": {
@@ -377,6 +387,17 @@ class CeleryBackendTestCase(SimpleTestCase):
 
             # The task returns `context.task_result.id`. We check if it matches the enqueued result ID.
             self.assertEqual(result.return_value, result.id)
+
+    def test_async_task_runs_in_worker(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.async_task_returns_42.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=2)
+
+            result.refresh()
+            self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+            self.assertEqual(result.return_value, 42)
 
     def test_takes_context_preserves_priority(self) -> None:
         with start_worker(app, perform_ping_check=False):

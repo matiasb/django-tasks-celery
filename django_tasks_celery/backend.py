@@ -1,3 +1,4 @@
+import functools
 from collections.abc import Iterable
 from typing import Any, TypeVar
 
@@ -127,10 +128,14 @@ class Task(BaseTask[P, T]):
         return task_result
 
     def __post_init__(self) -> None:
-        import functools
-        import inspect
-
-        is_async = inspect.iscoroutinefunction(self.func)
+        # Idempotent registration: every `task.using(...)` call constructs a
+        # new Task instance via dataclasses.replace, which re-runs
+        # __post_init__. Without this guard we'd re-register the Celery task
+        # (and rebuild the wrapper closure) on every enqueue path that uses
+        # .using(). `func` and `takes_context` don't change across .using()
+        # calls, so the first-registered wrapper is correct.
+        if self.module_path in celery_app.tasks:
+            return super().__post_init__()
 
         @functools.wraps(self.func)
         def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
@@ -141,36 +146,11 @@ class Task(BaseTask[P, T]):
             )
             backend_cls = type(self.get_backend())
 
-            if is_async:
-                import asyncio
-
-                async def _run_async() -> Any:
-                    task_started.send(backend_cls, task_result=task_result)
-                    try:
-                        if self.takes_context:
-                            return_value = await self.acall(
-                                TaskContext(task_result=task_result),  # type: ignore[arg-type]
-                                *args,
-                                **kwargs,
-                            )
-                        else:
-                            return_value = await self.acall(*args, **kwargs)
-                    except Exception:
-                        object.__setattr__(
-                            task_result, "status", TaskResultStatus.FAILED
-                        )
-                        task_finished.send(backend_cls, task_result=task_result)
-                        raise
-                    object.__setattr__(
-                        task_result, "status", TaskResultStatus.SUCCESSFUL
-                    )
-                    task_finished.send(backend_cls, task_result=task_result)
-                    return return_value
-
-                return asyncio.run(_run_async())
-
             task_started.send(backend_cls, task_result=task_result)
             try:
+                # `self.call()` handles both sync and async funcs (coroutines
+                # are wrapped via async_to_sync), so we don't need separate
+                # branches or asyncio.run() here.
                 if self.takes_context:
                     return_value = self.call(
                         TaskContext(task_result=task_result),  # type: ignore[arg-type]

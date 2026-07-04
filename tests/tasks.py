@@ -19,6 +19,11 @@ async def noop_task_async(*args: Any, **kwargs: Any) -> None:
 
 
 @task()
+async def async_task_returns_42() -> int:
+    return 42
+
+
+@task()
 def calculate_meaning_of_life() -> int:
     return 42
 
