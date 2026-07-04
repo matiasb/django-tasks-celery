@@ -388,6 +388,46 @@ class CeleryBackendTestCase(SimpleTestCase):
             # The task returns `context.task_result.id`. We check if it matches the enqueued result ID.
             self.assertEqual(result.return_value, result.id)
 
+    def test_real_worker_populates_timestamps_and_workers(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.calculate_meaning_of_life.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=2)
+
+            result.refresh()
+
+        self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+        self.assertEqual(result.return_value, 42)
+        self.assertIsNotNone(result.started_at)
+        self.assertIsNotNone(result.finished_at)
+        self.assertGreaterEqual(result.finished_at, result.started_at)  # type:ignore[arg-type,misc]
+        self.assertEqual(result.last_attempted_at, result.started_at)
+        self.assertEqual(len(result.worker_ids), 1)
+        self.assertEqual(result.attempts, 1)
+
+    def test_real_worker_failure_traceback(self) -> None:
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.failing_task_value_error.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            try:
+                celery_async_result.get(timeout=2)
+            except ValueError:
+                pass
+
+            result.refresh()
+
+        self.assertEqual(result.status, TaskResultStatus.FAILED)
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(result.errors[0].exception_class, ValueError)
+        traceback = result.errors[0].traceback
+        self.assertTrue(
+            traceback
+            and traceback.endswith("ValueError: This task failed due to ValueError\n"),
+            traceback,
+        )
+
     def test_async_task_runs_in_worker(self) -> None:
         with start_worker(app, perform_ping_check=False):
             result = test_tasks.async_task_returns_42.enqueue()
