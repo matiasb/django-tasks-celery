@@ -43,6 +43,61 @@ Note that all Celery configuration options must be specified in uppercase instea
 
 The Celery-based backend acts as an interface between [Django's tasks interface](https://docs.djangoproject.com/en/stable/topics/tasks/) and Celery, allowing tasks to be defined and enqueued using `django_tasks`, but sent to a Celery broker and executed by Celery workers.
 
+### Quickstart
+
+Define a task with the `django_tasks` decorator:
+
+```python
+# my_app/tasks.py
+from django_tasks import task
+
+@task()
+def send_welcome_email(user_id: int) -> None:
+    ...
+```
+
+Enqueue it from a view or anywhere in your Django code:
+
+```python
+result = send_welcome_email.enqueue(user_id=42)
+```
+
+`result` is a `TaskResult`. When the worker has picked the task up and finished it, refresh and inspect:
+
+```python
+result.refresh()
+
+if result.is_finished:
+    print(result.status)         # TaskResultStatus.SUCCESSFUL or .FAILED
+    print(result.started_at, result.finished_at)
+    if result.errors:
+        print(result.errors[0].exception_class, result.errors[0].traceback)
+```
+
+Pass per-call overrides through `using()`:
+
+```python
+from datetime import timedelta
+from django.utils import timezone
+
+send_welcome_email.using(
+    queue_name="emails",
+    priority=50,
+    run_after=timezone.now() + timedelta(minutes=5),
+).enqueue(user_id=42)
+```
+
+### Backend Capabilities
+
+| Feature | Supported | How |
+| --- | :---: | --- |
+| `supports_defer` (`run_after`) | yes | Celery `eta` |
+| `supports_async_task` (coroutines) | yes | wrapped via `async_to_sync` |
+| `supports_priority` (`-100`..`100`) | yes | mapped to Celery's `0`..`9`; **requires AMQP broker** (RabbitMQ) for reliable ordering |
+| `supports_get_result` / `refresh()` | yes | requires a Celery result backend |
+
+This backend bridges `django_tasks` to Celery; it doesn't expose Celery-specific primitives. If you need **chains, groups, chords, or periodic tasks (beat)**, keep using plain `@shared_task` for those — both can coexist in the same project. Django Task names are namespaced under `django_tasks:` in Celery's registry (see [Task Names in Celery](#task-names-in-celery)), so there's no collision.
+
 ### Celery App
 
 A Celery app is included at `django_tasks_celery.app`. It reads configuration from your Django settings with the `CELERY_` prefix and auto-discovers tasks. You can use it directly, or [configure your own Celery app](https://docs.celeryq.dev/en/main/django/first-steps-with-django.html#using-celery-with-django) as you normally would.
@@ -65,25 +120,20 @@ django_tasks:<module_path>
 
 For example, a `@task()`-decorated `my_app.tasks.send_email` is registered (and routed) as `django_tasks:my_app.tasks.send_email`. You'll see this name in `celery inspect registered`, worker logs, and any external monitoring (Flower, etc.). This is the name to use in Celery routing rules (`task_routes`) if you need per-task overrides.
 
-### Priorities
-
-Task priorities are mapped from the Django Tasks range (`-100` to `100`) to Celery's range (`0` to `9`) using a linear scale. This requires a broker that supports priority queues (e.g., RabbitMQ).
-
 ### Result Backend
 
 A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks. Also, you will need to set [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended) so the backend can populate `args`, `kwargs`, `worker_ids`, and `attempts` on `TaskResult`.
 
 #### `TaskResult` field availability
 
-The Django Tasks `TaskResult` exposes several fields that depend on what Celery's result backend can store:
+`TaskResult` exposes several fields whose availability depends on how Celery is configured. KV-backend means a key-value-style Celery result backend (Redis, memcached, `cache+...://`, filesystem, MongoDB). DB/RPC means `db+...://` or `rpc://`.
 
-- **`status`** while a task is running: the backend explicitly marks the task as `STARTED` (mapped to `RUNNING`) from inside the worker, so this works regardless of the [`CELERY_TASK_TRACK_STARTED`](https://docs.celeryq.dev/en/main/userguide/configuration.html#task-track-started) setting.
-- **`finished_at`** and **`last_attempted_at`** (for completed tasks): come from Celery's `date_done`. Always available with a configured result backend.
-- **`errors[*].traceback`**: uses the worker's serialized traceback string (`AsyncResult.traceback`).
-- **`worker_ids`** and **`attempts`**: require `CELERY_RESULT_EXTENDED=True` so the result meta carries `worker` and `retries`.
-- **`started_at`**: persisted via a side-channel key in the result backend so it survives Celery overwriting the meta with the return value on completion. This requires a **key-value-style result backend** — Redis, memcached, cache (`cache+...://`), filesystem, and MongoDB are supported. With the database (`db+...://`) or RPC (`rpc://`) backends, `started_at` will remain `None`.
-- **`enqueued_at`** and pre-worker **`task` / `args` / `kwargs`**: persisted via the same side-channel on `enqueue()`. This is what lets `get_result()` reconstruct the Task before the worker has stored anything — and what lets task reconstruction work even when `CELERY_RESULT_EXTENDED=False`. Same KV-backend requirement as `started_at`; on database/RPC backends, `enqueued_at` will be `None` and `get_result()` will only work after the worker has stored the result (with `CELERY_RESULT_EXTENDED=True`).
-
-### Deferred Tasks
-
-The backend supports `run_after` for scheduling tasks to execute at a future time, using Celery's `eta` parameter.
+| Field | Required configuration | Notes |
+| --- | --- | --- |
+| `status` (`RUNNING` during execution) | result backend | The wrapper explicitly writes `STARTED` from the worker, so works without `CELERY_TASK_TRACK_STARTED`. |
+| `finished_at`, `last_attempted_at` (completed) | result backend | From Celery's `date_done`. |
+| `errors[*].traceback` | result backend | The worker's serialized traceback string (`AsyncResult.traceback`). |
+| `errors[*].exception_class` | result backend | The original exception class round-trips through Celery's serializer. |
+| `worker_ids`, `attempts` | result backend + `CELERY_RESULT_EXTENDED=True` | Populated from `AsyncResult.worker` and `retries`. |
+| `started_at` | KV-backend | Persisted via a side-channel key so it survives Celery overwriting the meta with the return value on completion. `None` on DB/RPC backends. |
+| `enqueued_at`, pre-worker `task` / `args` / `kwargs` | KV-backend | Written by the same side-channel on `enqueue()`. Also lets `get_result()` reconstruct the Task even with `CELERY_RESULT_EXTENDED=False`. On DB/RPC backends `enqueued_at` is `None` and `get_result()` only works after the worker has stored the result (with `CELERY_RESULT_EXTENDED=True`). |
