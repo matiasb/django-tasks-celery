@@ -12,6 +12,7 @@ from celery.result import AsyncResult
 from celery.states import FAILURE, PENDING, RECEIVED, RETRY, REVOKED, STARTED, SUCCESS
 from django.apps import apps
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
 from django.utils import timezone
 from django_tasks.backends.base import BaseTaskBackend
 from django_tasks.base import (
@@ -353,8 +354,11 @@ class CeleryBackend(BaseTaskBackend):
         return task_result
 
     def get_result(self, result_id: str) -> TaskResult:
-        if celery_app.conf.result_backend is None:
-            raise ValueError("Celery result backend is not configured")
+        if not _result_backend_enabled():
+            raise ImproperlyConfigured(
+                "Celery result backend is not configured; "
+                "set CELERY_RESULT_BACKEND to enable get_result()."
+            )
 
         async_result = AsyncResult(result_id)
         state = async_result.state
@@ -425,7 +429,6 @@ class CeleryBackend(BaseTaskBackend):
         return task_result
 
     def _resolve_task(self, task_name: str, result_id: str) -> Task:
-        from django.core.exceptions import SuspiciousOperation
         from django.utils.module_loading import import_string
 
         # task_name may come from async_result.name (prefixed by us at
