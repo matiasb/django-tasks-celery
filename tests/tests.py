@@ -558,6 +558,13 @@ class CeleryBackendTestCase(SimpleTestCase):
         matching = [r for r in received if r.id == result.id]
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0].status, TaskResultStatus.FAILED)
+        # Signal handlers must see the error that caused the failure.
+        self.assertEqual(len(matching[0].errors), 1)
+        self.assertEqual(matching[0].errors[0].exception_class, ValueError)
+        self.assertIn(
+            "This task failed due to ValueError",
+            matching[0].errors[0].traceback,
+        )
 
 
 class CompatTestCase(SimpleTestCase):
