@@ -482,6 +482,31 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(len(result.worker_ids), 1)
         self.assertEqual(result.attempts, 1)
 
+    def test_deferred_task_runs_on_worker(self) -> None:
+        """Regression: a task enqueued with run_after is delivered to the
+        worker with `eta` as an ISO-8601 string. _build_task_result must
+        parse it back into a datetime before constructing the TaskResult;
+        otherwise validate_task calls timezone.is_aware() on a str and the
+        task fails with AttributeError ('str' has no attribute 'utcoffset')."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        # eta in the (near) past so the worker runs it immediately.
+        run_after = timezone.now() - timedelta(seconds=1)
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.calculate_meaning_of_life.using(
+                run_after=run_after
+            ).enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            celery_async_result.get(timeout=5)
+
+            result.refresh()
+
+        self.assertEqual(result.status, TaskResultStatus.SUCCESSFUL)
+        self.assertEqual(result.return_value, 42)
+
     def test_catches_exception(self) -> None:
         """End-to-end: a task that raises a regular Exception is recorded
         as FAILED with the original exception class, the worker's
