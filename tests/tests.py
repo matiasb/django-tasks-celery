@@ -482,7 +482,13 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(len(result.worker_ids), 1)
         self.assertEqual(result.attempts, 1)
 
-    def test_real_worker_failure_traceback(self) -> None:
+    def test_catches_exception(self) -> None:
+        """End-to-end: a task that raises a regular Exception is recorded
+        as FAILED with the original exception class, the worker's
+        serialized traceback, and consistent timestamps. Note: SystemExit
+        and other BaseException subclasses are not covered — Celery's
+        trace handler only catches Exception, so those kill the worker
+        before the result is recorded."""
         with start_worker(app, perform_ping_check=False):
             result = test_tasks.failing_task_value_error.enqueue()
 
@@ -495,6 +501,15 @@ class CeleryBackendTestCase(SimpleTestCase):
             result.refresh()
 
         self.assertEqual(result.status, TaskResultStatus.FAILED)
+        with self.assertRaisesMessage(ValueError, "Task failed"):
+            result.return_value  # noqa: B018
+        self.assertTrue(result.is_finished)
+        self.assertIsNotNone(result.started_at)
+        self.assertIsNotNone(result.last_attempted_at)
+        self.assertIsNotNone(result.finished_at)
+        self.assertGreaterEqual(result.started_at, result.enqueued_at)  # type:ignore[arg-type,misc]
+        self.assertGreaterEqual(result.finished_at, result.started_at)  # type:ignore[arg-type,misc]
+
         self.assertEqual(len(result.errors), 1)
         self.assertEqual(result.errors[0].exception_class, ValueError)
         traceback = result.errors[0].traceback
@@ -503,6 +518,68 @@ class CeleryBackendTestCase(SimpleTestCase):
             and traceback.endswith("ValueError: This task failed due to ValueError\n"),
             traceback,
         )
+
+        self.assertEqual(result.task, test_tasks.failing_task_value_error)
+        self.assertEqual(result.args, [])
+        self.assertEqual(result.kwargs, {})
+        self.assertEqual(result.attempts, 1)
+
+    def test_complex_exception(self) -> None:
+        """A nested exception (ValueError(ValueError(...))) round-trips
+        with the outer class and a traceback that mentions the inner repr."""
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.complex_exception.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            try:
+                celery_async_result.get(timeout=2)
+            except ValueError:
+                pass
+
+            result.refresh()
+
+        self.assertEqual(result.status, TaskResultStatus.FAILED)
+        self.assertIsNotNone(result.started_at)
+        self.assertIsNotNone(result.last_attempted_at)
+        self.assertIsNotNone(result.finished_at)
+        self.assertGreaterEqual(result.started_at, result.enqueued_at)  # type:ignore[arg-type,misc]
+        self.assertGreaterEqual(result.finished_at, result.started_at)  # type:ignore[arg-type,misc]
+
+        self.assertIsNone(result._return_value)
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(result.errors[0].exception_class, ValueError)
+        self.assertIn(
+            'ValueError(ValueError("This task failed"))', result.errors[0].traceback
+        )
+
+        self.assertEqual(result.task, test_tasks.complex_exception)
+        self.assertEqual(result.attempts, 1)
+
+    def test_complex_return_value(self) -> None:
+        """A return value the result serializer cannot encode (here, a
+        lambda under Celery's default JSON serializer) is marked FAILED
+        by Celery's worker with an EncodeError. Note: the task_finished
+        signal fires SUCCESSFUL inside our wrapper before Celery attempts
+        serialization, so signal handlers may see a different status than
+        the persisted state for this edge case."""
+        from kombu.exceptions import EncodeError
+
+        with start_worker(app, perform_ping_check=False):
+            result = test_tasks.complex_return_value.enqueue()
+
+            celery_async_result = AsyncResult(result.id, app=app)
+            try:
+                celery_async_result.get(timeout=2)
+            except EncodeError:
+                pass
+
+            result.refresh()
+
+        self.assertEqual(result.status, TaskResultStatus.FAILED)
+        self.assertIsNone(result._return_value)
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(result.errors[0].exception_class, EncodeError)
+        self.assertEqual(result.task, test_tasks.complex_return_value)
 
     def test_async_task_runs_in_worker(self) -> None:
         with start_worker(app, perform_ping_check=False):
