@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import functools
 import json
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 from celery import Task as CeleryTask
 from celery import current_app as celery_app
@@ -14,30 +16,30 @@ from django.apps import apps
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
 from django.utils import timezone
-from django_tasks.backends.base import BaseTaskBackend
-from django_tasks.base import (
+from typing_extensions import ParamSpec
+
+from .compat import (
     DEFAULT_TASK_PRIORITY,
     DEFAULT_TASK_QUEUE_NAME,
+    TASK_CLASSES,
     TASK_MAX_PRIORITY,
     TASK_MIN_PRIORITY,
+    BaseTaskBackend,
     TaskError,
     TaskResult,
+    TaskResultDoesNotExist,
     TaskResultStatus,
-)
-from django_tasks.base import (
-    Task as BaseTask,
-)
-from django_tasks.exceptions import TaskResultDoesNotExist
-from django_tasks.signals import task_enqueued, task_finished, task_started
-from django_tasks.utils import (
     get_exception_traceback,
     get_module_path,
     get_random_id,
     normalize_json,
+    task_enqueued,
+    task_finished,
+    task_started,
 )
-from typing_extensions import ParamSpec
-
-from .compat import TASK_CLASSES
+from .compat import (
+    Task as BaseTask,
+)
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -180,15 +182,21 @@ def _unmap_priority(value: int) -> int:
     return max(TASK_MIN_PRIORITY, min(mapped_value, TASK_MAX_PRIORITY))
 
 
-class Task(BaseTask[P, T]):
-    """Celery proxy to the task in the current celery app task registry."""
+class Task(BaseTask, Generic[P, T]):
+    """Celery proxy to the task in the current celery app task registry.
+
+    ``BaseTask`` is generic on the standalone ``django-tasks`` package but not
+    on Django 6.0's built-in ``django.tasks``, so we mix in ``Generic[P, T]``
+    directly rather than subscripting the base (which fails at runtime on the
+    built-in framework).
+    """
 
     def _build_task_result(
         self,
         request: Any,
         args: tuple,
         kwargs: dict,
-    ) -> "TaskResult[T]":
+    ) -> TaskResult[T]:
         hostname = request.hostname or "unknown"
         headers = request.headers or {}
         celery_priority = (
@@ -207,7 +215,7 @@ class Task(BaseTask[P, T]):
         if isinstance(run_after, str):
             run_after = datetime.fromisoformat(run_after)
 
-        task_result = TaskResult[T](
+        task_result: TaskResult[T] = TaskResult(
             task=self.using(
                 priority=priority,
                 queue_name=(
@@ -249,7 +257,7 @@ class Task(BaseTask[P, T]):
 
         @functools.wraps(self.func)
         def wrapper(celery_task_self: CeleryTask, *args: Any, **kwargs: Any) -> Any:
-            from django_tasks.base import TaskContext
+            from .compat import TaskContext
 
             started_at = timezone.now()
             task_result = self._build_task_result(
@@ -275,7 +283,7 @@ class Task(BaseTask[P, T]):
                 # branches or asyncio.run() here.
                 if self.takes_context:
                     return_value = self.call(
-                        TaskContext(task_result=task_result),  # type: ignore[arg-type]
+                        TaskContext(task_result=task_result),
                         *args,
                         **kwargs,
                     )
@@ -341,7 +349,7 @@ class CeleryBackend(BaseTaskBackend):
             **send_task_kwargs,
         )
 
-        task_result = TaskResult[T](
+        task_result: TaskResult[T] = TaskResult(
             task=task,
             id=task_id,
             status=TaskResultStatus.READY,

@@ -12,6 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@just
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Type-checking resolves framework types from the standalone
+          # django-tasks package (django-stubs doesn't cover the built-in
+          # django.tasks yet), so install the extra here.
+          pip install -e '.[django-tasks]' --group dev
+          pip install "Django~=5.2"
+      - name: Lint
+        run: just lint
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -37,12 +56,17 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.python-version }}-pip-${{ hashFiles('pyproject.toml') }}
       - uses: taiki-e/install-action@just
       - name: Install dependencies
+        shell: bash
         run: |
           pip install --upgrade pip
           pip install -e . --group dev
-          pip install Django~=${{ matrix.django-version }}
-      - name: Lint
-        run: just lint
+          pip install "Django~=${{ matrix.django-version }}"
+          # Django < 6.0 needs the standalone django-tasks package; on 6.0 we
+          # deliberately leave it out so the suite runs against the built-in
+          # django.tasks framework.
+          if [ "${{ matrix.django-version }}" = "5.2" ]; then
+            pip install -e '.[django-tasks]'
+          fi
       - name: Run tests
         if: ${{ !cancelled() }}
         run: just test -v2
