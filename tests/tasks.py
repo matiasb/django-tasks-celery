@@ -34,11 +34,6 @@ def failing_task_value_error() -> None:
 
 
 @task()
-def failing_task_system_exit() -> None:
-    raise SystemExit("This task failed due to SystemExit")
-
-
-@task()
 def complex_exception() -> None:
     raise ValueError(ValueError("This task failed"))
 

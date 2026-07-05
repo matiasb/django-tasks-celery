@@ -15,7 +15,7 @@ readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -46,6 +46,9 @@ dependencies = [
 Source = "https://github.com/matiasb/django-tasks-celery"
 Issues = "https://github.com/matiasb/django-tasks-celery/issues"
 Changelog = "https://github.com/matiasb/django-tasks-celery/releases"
+
+[tool.setuptools.packages.find]
+include = ["django_tasks_celery*"]
 
 [dependency-groups]
 dev = [

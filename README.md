@@ -2,6 +2,8 @@
 
 A [Django Tasks](https://docs.djangoproject.com/en/stable/topics/tasks/) backend which uses Celery as its underlying queue.
 
+It builds on the [`django-tasks`](https://pypi.org/project/django-tasks/) package (installed automatically) and works on Django 5.2 and 6.0. Define and enqueue tasks with the `django_tasks` API shown below — on Django 6.0, use `from django_tasks import task`, not the built-in `django.tasks`, which is a separate framework this backend doesn't target.
+
 ## Installation
 
 ```
@@ -122,11 +124,11 @@ For example, a `@task()`-decorated `my_app.tasks.send_email` is registered (and 
 
 ### Result Backend
 
-A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work. If no result backend is configured, a warning will be raised during Django's system checks. Also, you will need to set [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended) so the backend can populate `args`, `kwargs`, `worker_ids`, and `attempts` on `TaskResult`.
+A [Celery result backend](https://docs.celeryq.dev/en/main/userguide/configuration.html#conf-result-backend) is **required** for `get_result()` and `refresh()` to work; without one, a warning is raised during Django's system checks. Setting [`CELERY_RESULT_EXTENDED=True`](https://docs.celeryq.dev/en/main/userguide/configuration.html#result-extended) is recommended so `worker_ids` and `attempts` are populated on completed results (`args` and `kwargs` don't need it — they come from the side-channel on key-value backends).
 
 #### `TaskResult` field availability
 
-`TaskResult` exposes several fields whose availability depends on how Celery is configured. KV-backend means a key-value-style Celery result backend (Redis, memcached, `cache+...://`, filesystem, MongoDB). DB/RPC means `db+...://` or `rpc://`.
+Which `TaskResult` fields are populated depends on how Celery is configured. Below, KV-backend means a key-value-style Celery result backend (Redis, memcached, `cache+...://`, filesystem, MongoDB); DB/RPC means `db+...://` or `rpc://`.
 
 | Field | Required configuration | Notes |
 | --- | --- | --- |
