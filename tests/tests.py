@@ -5,12 +5,8 @@ from unittest.mock import patch
 
 from celery.contrib.testing.worker import start_worker
 from celery.result import AsyncResult
-from django import VERSION
 from django.core.exceptions import SuspiciousOperation
 from django.test import SimpleTestCase, override_settings
-from django_tasks import TaskResultStatus, default_task_backend, task_backends
-from django_tasks.base import Task
-from django_tasks.exceptions import InvalidTaskError, TaskResultDoesNotExist
 
 from django_tasks_celery import compat
 from django_tasks_celery.app import app
@@ -19,6 +15,14 @@ from django_tasks_celery.backend import (
     _map_priority,
     _to_celery_name,
     _unmap_priority,
+)
+from django_tasks_celery.compat import (
+    InvalidTaskError,
+    Task,
+    TaskResultDoesNotExist,
+    TaskResultStatus,
+    default_task_backend,
+    task_backends,
 )
 from tests import tasks as test_tasks
 
@@ -67,7 +71,10 @@ class CeleryBackendTestCase(SimpleTestCase):
                 self.assertEqual(result.attempts, 0)
 
     def test_enqueue_logs(self) -> None:
-        with self.assertLogs("django_tasks", level="DEBUG") as captured_logs:
+        # The framework logs enqueue under its own logger: "django.tasks" for
+        # the built-in framework, "django_tasks" for the standalone package.
+        logger_name = "django.tasks" if compat.USE_CORE_TASKS else "django_tasks"
+        with self.assertLogs(logger_name, level="DEBUG") as captured_logs:
             result = test_tasks.noop_task.enqueue()
 
         self.assertEqual(len(captured_logs.output), 1)
@@ -674,7 +681,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(pending_result.task, test_tasks.noop_task)
 
     def test_task_started_signal_fired(self) -> None:
-        from django_tasks.signals import task_started
+        from django_tasks_celery.compat import task_started
 
         received: list = []
 
@@ -693,7 +700,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(len(matching), 1)
 
     def test_task_finished_signal_fired_on_success(self) -> None:
-        from django_tasks.signals import task_finished
+        from django_tasks_celery.compat import task_finished
 
         received: list = []
 
@@ -713,7 +720,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(matching[0].status, TaskResultStatus.SUCCESSFUL)
 
     def test_task_finished_signal_fired_on_failure(self) -> None:
-        from django_tasks.signals import task_finished
+        from django_tasks_celery.compat import task_finished
 
         received: list = []
 
@@ -772,10 +779,21 @@ class AppConfigTestCase(SimpleTestCase):
 
 
 class CompatTestCase(SimpleTestCase):
-    def test_compat_has_django_task(self) -> None:
+    def test_active_framework_task_recognized(self) -> None:
+        # The active framework's Task (whichever compat resolved) is always
+        # recognized in isinstance checks.
         self.assertIn(Task, compat.TASK_CLASSES)
 
-        if VERSION >= (6, 0):
-            from django.tasks.base import Task as DjangoTask
+    def test_other_framework_task_recognized_when_installed(self) -> None:
+        # When both frameworks are importable (e.g. Django 6.0 with the
+        # standalone django-tasks also installed), the other framework's Task
+        # is recognized too, so mixing them doesn't break _resolve_task.
+        import importlib
 
-            self.assertIn(DjangoTask, compat.TASK_CLASSES)
+        other = "django_tasks.base" if compat.USE_CORE_TASKS else "django.tasks.base"
+        try:
+            other_task = importlib.import_module(other).Task
+        except ImportError:
+            self.skipTest(f"{other} not importable")
+
+        self.assertIn(other_task, compat.TASK_CLASSES)

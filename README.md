@@ -2,19 +2,30 @@
 
 A [Django Tasks](https://docs.djangoproject.com/en/stable/topics/tasks/) backend which uses Celery as its underlying queue.
 
-> **Requirements.** This backend builds on the standalone
-> [`django-tasks`](https://pypi.org/project/django-tasks/) package (installed
-> automatically) and supports Django 5.2 and 6.0.
+> **Django version support.** This backend works on Django 5.2 and 6.0+, and
+> adapts to whichever Tasks framework your Django version provides:
 >
-> On Django 6.0, the standalone `django-tasks` and Django's built-in
-> `django.tasks` are **separate frameworks**. This backend targets the
-> standalone one, so always define and enqueue your tasks with
-> `from django_tasks import task` — not `from django.tasks import task`.
+> - **Django 6.0+** — uses the built-in
+>   [`django.tasks`](https://docs.djangoproject.com/en/stable/topics/tasks/)
+>   framework. No extra dependency is needed; define tasks with
+>   `from django.tasks import task`.
+> - **Django 5.2** — uses the standalone
+>   [`django-tasks`](https://pypi.org/project/django-tasks/) package. Install it
+>   via the `django-tasks` extra (see below) and define tasks with
+>   `from django_tasks import task`.
 
 ## Installation
 
+On Django 6.0 and later:
+
 ```
 python -m pip install django-tasks-celery
+```
+
+On Django 5.2, also pull in the standalone `django-tasks` package via the extra:
+
+```
+python -m pip install "django-tasks-celery[django-tasks]"
 ```
 
 First, add `django_tasks_celery` to your `INSTALLED_APPS`:
@@ -50,17 +61,17 @@ Note that all Celery configuration options must be specified in uppercase instea
 
 ## Usage
 
-The Celery-based backend acts as an interface between [Django's tasks interface](https://docs.djangoproject.com/en/stable/topics/tasks/) and Celery, allowing tasks to be defined and enqueued using `django_tasks`, but sent to a Celery broker and executed by Celery workers.
+The Celery-based backend acts as an interface between [Django's Tasks framework](https://docs.djangoproject.com/en/stable/topics/tasks/) and Celery, allowing tasks to be defined and enqueued using the Tasks API, but sent to a Celery broker and executed by Celery workers.
 
 ### Quickstart
 
-Define a task with the `django_tasks` decorator — this is the standalone
-`django_tasks` package, not Django 6.0's built-in `django.tasks` (see the
-**Requirements** note at the top):
+Define a task with the `task` decorator. On Django 6.0+ import it from the
+built-in `django.tasks`; on Django 5.2 import it from the standalone
+`django_tasks` package instead (see the **Django version support** note above):
 
 ```python
 # my_app/tasks.py
-from django_tasks import task
+from django.tasks import task  # Django 5.2: from django_tasks import task
 
 @task()
 def send_welcome_email(user_id: int) -> None:

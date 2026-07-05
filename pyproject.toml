@@ -39,6 +39,14 @@ dependencies = [
     "typing_extensions",
     "django-stubs-ext",
     "celery>=5.3",
+]
+
+[project.optional-dependencies]
+# The standalone django-tasks package is required on Django < 6.0, which does
+# not ship the built-in django.tasks framework. On Django 6.0+ the built-in
+# framework is used, so this extra is unnecessary. Install on older Django with:
+#   pip install django-tasks-celery[django-tasks]
+django-tasks = [
     "django-tasks>=0.12.0",
 ]
 
