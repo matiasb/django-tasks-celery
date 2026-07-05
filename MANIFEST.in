@@ -1,0 +1,4 @@
+graft tests
+include manage.py
+include justfile
+global-exclude *.py[cod]
