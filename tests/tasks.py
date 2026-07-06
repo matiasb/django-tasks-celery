@@ -1,6 +1,6 @@
 from typing import Any
 
-from django_tasks_celery.compat import TaskContext, task
+from django_tasks_fennel.compat import TaskContext, task
 
 
 @task()

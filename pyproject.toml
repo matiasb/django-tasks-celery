@@ -5,7 +5,7 @@ requires = [
 ]
 
 [project]
-name = "django-tasks-celery"
+name = "django-tasks-fennel"
 description = "A Django Tasks backend which uses Celery as its underlying queue"
 authors = [
     {name = "Matías Bordese"},
@@ -45,18 +45,18 @@ dependencies = [
 # The standalone django-tasks package is required on Django < 6.0, which does
 # not ship the built-in django.tasks framework. On Django 6.0+ the built-in
 # framework is used, so this extra is unnecessary. Install on older Django with:
-#   pip install django-tasks-celery[django-tasks]
+#   pip install django-tasks-fennel[django-tasks]
 django-tasks = [
     "django-tasks>=0.12.0",
 ]
 
 [project.urls]
-Source = "https://github.com/matiasb/django-tasks-celery"
-Issues = "https://github.com/matiasb/django-tasks-celery/issues"
-Changelog = "https://github.com/matiasb/django-tasks-celery/releases"
+Source = "https://github.com/matiasb/django-tasks-fennel"
+Issues = "https://github.com/matiasb/django-tasks-fennel/issues"
+Changelog = "https://github.com/matiasb/django-tasks-fennel/releases"
 
 [tool.setuptools.packages.find]
-include = ["django_tasks_celery*"]
+include = ["django_tasks_fennel*"]
 
 [dependency-groups]
 dev = [

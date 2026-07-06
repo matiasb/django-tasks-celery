@@ -8,15 +8,15 @@ from celery.result import AsyncResult
 from django.core.exceptions import SuspiciousOperation
 from django.test import SimpleTestCase, override_settings
 
-from django_tasks_celery import compat
-from django_tasks_celery.app import app
-from django_tasks_celery.backend import (
+from django_tasks_fennel import compat
+from django_tasks_fennel.app import app
+from django_tasks_fennel.backend import (
     CeleryBackend,
     _map_priority,
     _to_celery_name,
     _unmap_priority,
 )
-from django_tasks_celery.compat import (
+from django_tasks_fennel.compat import (
     InvalidTaskError,
     Task,
     TaskResultDoesNotExist,
@@ -88,7 +88,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         run_after = timezone.now() + timedelta(hours=10)
         with patch(
-            "django_tasks_celery.backend.celery_app.send_task"
+            "django_tasks_fennel.backend.celery_app.send_task"
         ) as mock_send_task:
             result = test_tasks.noop_task.using(
                 run_after=run_after, priority=75, queue_name="queue-1"
@@ -129,11 +129,11 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         error_messages = [e for e in errors if e.level >= 40]
         self.assertEqual(len(error_messages), 1)
-        self.assertIn("django_tasks_celery", error_messages[0].hint)  # type:ignore[arg-type]
+        self.assertIn("django_tasks_fennel", error_messages[0].hint)  # type:ignore[arg-type]
 
     def test_queue_isolation(self) -> None:
         with patch(
-            "django_tasks_celery.backend.celery_app.send_task"
+            "django_tasks_fennel.backend.celery_app.send_task"
         ) as mock_send_task:
             test_tasks.noop_task.enqueue()
             default_call_kwargs = mock_send_task.call_args
@@ -148,7 +148,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         with override_settings(
             TASKS={
                 "default": {
-                    "BACKEND": "django_tasks_celery.CeleryBackend",
+                    "BACKEND": "django_tasks_fennel.CeleryBackend",
                     "QUEUES": ["unknown_queue"],
                 }
             }
@@ -166,7 +166,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         with override_settings(
             TASKS={
                 "default": {
-                    "BACKEND": "django_tasks_celery.CeleryBackend",
+                    "BACKEND": "django_tasks_fennel.CeleryBackend",
                     "QUEUES": ["unknown_queue"],
                 }
             }
@@ -185,7 +185,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.name = test_tasks.noop_task.module_path
             mock_async_result.state = "SUCCESS"
@@ -207,7 +207,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.name = test_tasks.noop_task.module_path
             mock_async_result.state = "RETRY"
@@ -228,7 +228,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.name = test_tasks.noop_task.module_path
             mock_async_result.state = "RECEIVED"
@@ -249,7 +249,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.name = test_tasks.noop_task.module_path
             mock_async_result.state = "REVOKED"
@@ -270,7 +270,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
         result = await default_task_backend.aenqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.name = test_tasks.noop_task.module_path
             mock_async_result.state = "SUCCESS"
@@ -295,7 +295,7 @@ class CeleryBackendTestCase(SimpleTestCase):
     def test_get_result_without_backend_raises_improperly_configured(self) -> None:
         from django.core.exceptions import ImproperlyConfigured
 
-        from django_tasks_celery.backend import celery_app
+        from django_tasks_fennel.backend import celery_app
 
         with override_settings(CELERY_RESULT_BACKEND="disabled"):
             celery_app.config_from_object("django.conf:settings", namespace="CELERY")
@@ -322,7 +322,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         CELERY_RESULT_EXTENDED, by carrying the task name and args/kwargs."""
         result = default_task_backend.enqueue(test_tasks.noop_task, [1], {"two": 3})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             # Without result_extended, Celery returns name=None / args=None /
             # kwargs=None for completed tasks too.
@@ -356,7 +356,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         """Verify that enqueue uses send_task with the namespaced task name
         so we don't collide with unrelated @shared_task registrations."""
         with patch(
-            "django_tasks_celery.backend.celery_app.send_task"
+            "django_tasks_fennel.backend.celery_app.send_task"
         ) as mock_send_task:
             result = test_tasks.noop_task.enqueue()
 
@@ -401,7 +401,7 @@ class CeleryBackendTestCase(SimpleTestCase):
     @override_settings(
         TASKS={
             "default": {
-                "BACKEND": "django_tasks_celery.CeleryBackend",
+                "BACKEND": "django_tasks_fennel.CeleryBackend",
                 "QUEUES": [],
             }
         }
@@ -413,7 +413,7 @@ class CeleryBackendTestCase(SimpleTestCase):
     @override_settings(CELERY_RESULT_BACKEND="disabled")
     def test_result_backend_warning(self) -> None:
         """Check that a warning is issued when no result backend is configured."""
-        from django_tasks_celery.backend import celery_app
+        from django_tasks_fennel.backend import celery_app
 
         celery_app.config_from_object("django.conf:settings", namespace="CELERY")
         try:
@@ -430,7 +430,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
     @override_settings(CELERY_RESULT_EXTENDED=False)
     def test_result_extended_warning(self) -> None:
-        from django_tasks_celery.backend import celery_app
+        from django_tasks_fennel.backend import celery_app
 
         celery_app.config_from_object("django.conf:settings", namespace="CELERY")
         try:
@@ -645,7 +645,7 @@ class CeleryBackendTestCase(SimpleTestCase):
 
     @override_settings(CELERY_BROKER_URL="amqp://localhost")
     def test_no_priority_warning_with_amqp_broker(self) -> None:
-        from django_tasks_celery.backend import celery_app
+        from django_tasks_fennel.backend import celery_app
 
         celery_app.config_from_object("django.conf:settings", namespace="CELERY")
         try:
@@ -662,7 +662,7 @@ class CeleryBackendTestCase(SimpleTestCase):
     def test_get_result_pending_returns_ready(self) -> None:
         result = default_task_backend.enqueue(test_tasks.noop_task, [], {})
 
-        with patch("django_tasks_celery.backend.AsyncResult") as mock_async_result_cls:
+        with patch("django_tasks_fennel.backend.AsyncResult") as mock_async_result_cls:
             mock_async_result = mock_async_result_cls.return_value
             mock_async_result.id = result.id
             # enqueue() pre-stores the task name in the result backend, so name
@@ -681,7 +681,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(pending_result.task, test_tasks.noop_task)
 
     def test_task_started_signal_fired(self) -> None:
-        from django_tasks_celery.compat import task_started
+        from django_tasks_fennel.compat import task_started
 
         received: list = []
 
@@ -700,7 +700,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(len(matching), 1)
 
     def test_task_finished_signal_fired_on_success(self) -> None:
-        from django_tasks_celery.compat import task_finished
+        from django_tasks_fennel.compat import task_finished
 
         received: list = []
 
@@ -720,7 +720,7 @@ class CeleryBackendTestCase(SimpleTestCase):
         self.assertEqual(matching[0].status, TaskResultStatus.SUCCESSFUL)
 
     def test_task_finished_signal_fired_on_failure(self) -> None:
-        from django_tasks_celery.compat import task_finished
+        from django_tasks_fennel.compat import task_finished
 
         received: list = []
 
@@ -756,11 +756,11 @@ class AppConfigTestCase(SimpleTestCase):
     def test_appconfig_is_discovered(self) -> None:
         from django.apps import apps
 
-        from django_tasks_celery.apps import DjangoTasksCeleryConfig
+        from django_tasks_fennel.apps import DjangoTasksFennelConfig
 
         self.assertIsInstance(
-            apps.get_app_config("django_tasks_celery"),
-            DjangoTasksCeleryConfig,
+            apps.get_app_config("django_tasks_fennel"),
+            DjangoTasksFennelConfig,
         )
 
     def test_backend_module_does_not_set_default_app(self) -> None:
@@ -772,7 +772,7 @@ class AppConfigTestCase(SimpleTestCase):
         from celery._state import _tls
 
         before_default = _tls.current_app
-        importlib.reload(importlib.import_module("django_tasks_celery.backend"))
+        importlib.reload(importlib.import_module("django_tasks_fennel.backend"))
         after_default = _tls.current_app
 
         self.assertIs(before_default, after_default)
