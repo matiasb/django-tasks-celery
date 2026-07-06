@@ -4,7 +4,7 @@ This backend works against either Django's built-in ``django.tasks`` framework
 (Django 6.0+) or the standalone ``django-tasks`` package (Django 5.2). On 6.0+
 the built-in framework is preferred, so the standalone ``django-tasks``
 dependency is only required on 5.2 (installed via the ``django-tasks`` extra:
-``pip install django-tasks-celery[django-tasks]``).
+``pip install django-tasks-fennel[django-tasks]``).
 
 Every framework import in this package goes through this module, so the switch
 between the two implementations lives in exactly one place.
@@ -78,10 +78,10 @@ else:
 
     if find_spec("django_tasks") is None:
         raise ImportError(
-            "django-tasks-celery requires the standalone 'django-tasks' package "
+            "django-tasks-fennel requires the standalone 'django-tasks' package "
             "on Django < 6.0 (Django 6.0+ ships the built-in django.tasks "
             "framework instead). Install it with: "
-            "pip install 'django-tasks-celery[django-tasks]'"
+            "pip install 'django-tasks-fennel[django-tasks]'"
         )
 
     from django_tasks import (

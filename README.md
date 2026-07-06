@@ -1,4 +1,4 @@
-# Django Tasks Celery
+# Django Tasks Fennel
 
 A [Django Tasks](https://docs.djangoproject.com/en/stable/topics/tasks/) backend which uses Celery as its underlying queue.
 
@@ -19,21 +19,21 @@ A [Django Tasks](https://docs.djangoproject.com/en/stable/topics/tasks/) backend
 On Django 6.0 and later:
 
 ```
-python -m pip install django-tasks-celery
+python -m pip install django-tasks-fennel
 ```
 
 On Django 5.2, also pull in the standalone `django-tasks` package via the extra:
 
 ```
-python -m pip install "django-tasks-celery[django-tasks]"
+python -m pip install "django-tasks-fennel[django-tasks]"
 ```
 
-First, add `django_tasks_celery` to your `INSTALLED_APPS`:
+First, add `django_tasks_fennel` to your `INSTALLED_APPS`:
 
 ```python
 INSTALLED_APPS = [
     # ...
-    "django_tasks_celery",
+    "django_tasks_fennel",
 ]
 ```
 
@@ -42,7 +42,7 @@ Then, configure it as your `TASKS` backend:
 ```python
 TASKS = {
     "default": {
-        "BACKEND": "django_tasks_celery.CeleryBackend",
+        "BACKEND": "django_tasks_fennel.CeleryBackend",
         "QUEUES": ["default"]
     }
 }
@@ -122,14 +122,14 @@ This backend bridges `django_tasks` to Celery; it doesn't expose Celery-specific
 
 ### Celery App
 
-A Celery app is included at `django_tasks_celery.app`. It reads configuration from your Django settings with the `CELERY_` prefix and auto-discovers tasks. You can use it directly, or [configure your own Celery app](https://docs.celeryq.dev/en/main/django/first-steps-with-django.html#using-celery-with-django) as you normally would.
+A Celery app is included at `django_tasks_fennel.app`. It reads configuration from your Django settings with the `CELERY_` prefix and auto-discovers tasks. You can use it directly, or [configure your own Celery app](https://docs.celeryq.dev/en/main/django/first-steps-with-django.html#using-celery-with-django) as you normally would.
 
 ### Running Workers
 
 Start a Celery worker as usual:
 
 ```shell
-DJANGO_SETTINGS_MODULE=<your_project.settings> celery -A django_tasks_celery.app worker -l INFO
+DJANGO_SETTINGS_MODULE=<your_project.settings> celery -A django_tasks_fennel.app worker -l INFO
 ```
 
 ### Task Names in Celery

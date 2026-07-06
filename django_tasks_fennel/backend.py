@@ -59,8 +59,8 @@ CELERY_STATUS_TO_RESULT_STATUS = {
 }
 
 DJANGO_TASKS_PRIORITY_HEADER = "django_tasks_priority"
-STARTED_AT_KEY_PREFIX = b"django-tasks-celery-started-at:"
-ENQUEUE_INFO_KEY_PREFIX = b"django-tasks-celery-enqueue:"
+STARTED_AT_KEY_PREFIX = b"django-tasks-started-at:"
+ENQUEUE_INFO_KEY_PREFIX = b"django-tasks-enqueue:"
 
 # Prefix used when registering Django Tasks in Celery's task registry, so
 # they don't collide with unrelated @shared_task registrations that may
@@ -74,7 +74,7 @@ def _to_celery_name(module_path: str) -> str:
 
 
 def _to_module_path(task_name: str) -> str:
-    """Strip the django-tasks-celery namespace prefix from a Celery task
+    """Strip the django-tasks-fennel namespace prefix from a Celery task
     name to recover the importable module path. Leaves unprefixed names
     alone so the side-channel (which stores raw module paths) round-trips."""
     if task_name.startswith(CELERY_TASK_NAME_PREFIX):
@@ -463,10 +463,10 @@ class CeleryBackend(BaseTaskBackend):
 
         backend_name = self.__class__.__name__
 
-        if not apps.is_installed("django_tasks_celery"):
+        if not apps.is_installed("django_tasks_fennel"):
             yield checks.Error(
-                f"{backend_name} configured as django_tasks backend, but django_tasks_celery app not installed",
-                hint="Insert 'django_tasks_celery' in INSTALLED_APPS",
+                f"{backend_name} configured as django_tasks backend, but django_tasks_fennel app not installed",
+                hint="Insert 'django_tasks_fennel' in INSTALLED_APPS",
             )
 
         # Check that a result backend is configured

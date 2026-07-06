@@ -8,7 +8,7 @@ IN_TEST = "IN_TEST" in os.environ or (len(sys.argv) > 1 and sys.argv[1] == "test
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
-    "django_tasks_celery",
+    "django_tasks_fennel",
     "tests",
 ]
 
@@ -21,7 +21,7 @@ if not IN_TEST:
 
 TASKS = {
     "default": {
-        "BACKEND": "django_tasks_celery.CeleryBackend",
+        "BACKEND": "django_tasks_fennel.CeleryBackend",
         "QUEUES": ["default", "queue-1"],
     }
 }
