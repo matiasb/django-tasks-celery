@@ -777,6 +777,80 @@ class AppConfigTestCase(SimpleTestCase):
 
         self.assertIs(before_default, after_default)
 
+    def _run_setup_in_subprocess(self, preamble: str, checks: str) -> None:
+        """Run `django.setup()` in a fresh interpreter with a minimal settings
+        module (only django_tasks_fennel installed) and assert on the resulting
+        Celery `current_app`.
+
+        A subprocess with clean Celery state is required: the in-process test
+        settings import the bundled app via tests/__init__.py, which would mask
+        whether AppConfig.ready() installs it on its own.
+        """
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        import textwrap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "fallback_settings.py"), "w") as f:
+                f.write(
+                    textwrap.dedent(
+                        """
+                        INSTALLED_APPS = ["django_tasks_fennel"]
+                        SECRET_KEY = "x"
+                        USE_TZ = True
+                        TASKS = {
+                            "default": {
+                                "BACKEND": "django_tasks_fennel.CeleryBackend",
+                                "QUEUES": ["default"],
+                            }
+                        }
+                        CELERY_BROKER_URL = "memory://"
+                        CELERY_RESULT_BACKEND = "cache+memory://"
+                        """
+                    )
+                )
+            script = f"{textwrap.dedent(preamble)}\nimport django\ndjango.setup()\nfrom celery import current_app\n{textwrap.dedent(checks)}\nprint('SUBPROCESS_OK')\n"
+            env = dict(os.environ)
+            env["DJANGO_SETTINGS_MODULE"] = "fallback_settings"
+            env["PYTHONPATH"] = tmp + os.pathsep + env.get("PYTHONPATH", "")
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SUBPROCESS_OK", result.stdout)
+
+    def test_appconfig_installs_bundled_app_without_project_app(self) -> None:
+        """With no project Celery app, ready() installs the bundled app so
+        current_app uses the configured broker (regression: enqueue() failing
+        with a connection error because current_app was celery's broker-less
+        default app)."""
+        self._run_setup_in_subprocess(
+            preamble="",
+            checks=(
+                "assert current_app.main == 'django_tasks', current_app.main\n"
+                "assert current_app.conf.broker_url == 'memory://', "
+                "current_app.conf.broker_url"
+            ),
+        )
+
+    def test_appconfig_respects_existing_project_app(self) -> None:
+        """If the project configured its own Celery app before Django starts,
+        ready() must leave it as the current app."""
+        self._run_setup_in_subprocess(
+            preamble=(
+                "from celery import Celery\n"
+                "user_app = Celery('my_project', broker='memory://user', "
+                "set_as_current=True)"
+            ),
+            checks="assert current_app.main == 'my_project', current_app.main",
+        )
+
 
 class CompatTestCase(SimpleTestCase):
     def test_active_framework_task_recognized(self) -> None:
