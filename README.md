@@ -118,7 +118,7 @@ send_welcome_email.using(
 | `supports_priority` (`-100`..`100`) | yes | mapped to Celery's `0`..`9`; **requires AMQP broker** (RabbitMQ) for reliable ordering |
 | `supports_get_result` / `refresh()` | yes | requires a Celery result backend |
 
-This backend bridges `django_tasks` to Celery; it doesn't expose Celery-specific primitives. If you need **chains, groups, chords, or periodic tasks (beat)**, keep using plain `@shared_task` for those — both can coexist in the same project. Django Task names are namespaced under `django_tasks:` in Celery's registry (see [Task Names in Celery](#task-names-in-celery)), so there's no collision.
+This backend bridges Django's Tasks framework to Celery; it doesn't expose Celery-specific primitives. If you need **chains, groups, chords, or periodic tasks (beat)**, keep using plain `@shared_task` for those — both can coexist in the same project. Django Task names are namespaced under `django_tasks:` in Celery's registry (see [Task Names in Celery](#task-names-in-celery)), so there's no collision.
 
 ### Celery App
 
